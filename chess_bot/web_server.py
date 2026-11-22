@@ -287,7 +287,8 @@ async def index(request: web.Request) -> web.FileResponse:
 
 
 async def health(request: web.Request) -> web.Response:
-    return web.json_response({"ok": True, "telegram": bool(request.app.get("bot_token"))})
+    bot_ok = bool(request.app.get("bot_healthy", False))
+    return web.json_response({"ok": True, "telegram": bool(request.app.get("bot_token")), "bot": bot_ok})
 
 
 async def api_new(request: web.Request) -> web.Response:

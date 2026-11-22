@@ -13,10 +13,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY chess_bot ./chess_bot
 COPY tools ./tools
+COPY index.html ./index.html
+COPY render.yaml ./render.yaml
 
 # локальный каталог копий; на Render база живёт в Postgres, а копии уходят в Drive
 RUN mkdir -p /data /app/backups
 
 EXPOSE 10000
 
-CMD ["python", "-m", "chess_bot.web_server", "--host", "0.0.0.0", "--port", "10000"]
+CMD ["python", "-m", "chess_bot.bot"]

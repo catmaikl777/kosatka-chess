@@ -704,6 +704,7 @@ async def main() -> None:
         host = os.environ.get("WEBAPP_HOST", "0.0.0.0")
         port = int(os.environ.get("WEBAPP_PORT", "8080"))
         runner = await run_server(host, port, store, token)
+        runner.app["bot_healthy"] = True
         log.info("Web App доступен по %s", webapp_url)
     else:
         log.warning("WEBAPP_URL не задан — веб-версия выключена, работают только доски-картинки")
