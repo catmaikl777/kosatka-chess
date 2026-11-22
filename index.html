@@ -234,60 +234,50 @@ function pieceMarkup(p, cx, cy, size, flip, extra = '') {
 
 /* ---------- звук (WebAudio, без файлов) ---------- */
 
+const SND_STEP = ['assets/snd/step1.mp3', 'assets/snd/step2.mp3'];
+const SND_CHECK = 'assets/snd/check-mate.mp3';
+
 const Sound = {
-  ctx: null,
   enabled: localStorage.getItem('kosatka_sound') !== '0',
-  ensure() {
-    if (!this.ctx) {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (AC) this.ctx = new AC();
-    }
-    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
-    return this.ctx;
+  volume: 0.6,
+  stepVolume: 0.55,
+  checkVolume: 0.7,
+  cache: {},
+
+  preload() {
+    [...SND_STEP, SND_CHECK].forEach((src) => {
+      const a = new Audio();
+      a.src = src;
+      a.preload = 'auto';
+      this.cache[src] = a;
+    });
   },
-  tone(freq, duration, { type = 'sine', gain = 0.12, at = 0, slide = 0 } = {}) {
-    if (!this.enabled) return;
-    const ctx = this.ensure();
-    if (!ctx) return;
-    const osc = ctx.createOscillator();
-    const vol = ctx.createGain();
-    const start = ctx.currentTime + at;
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, start);
-    if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(40, freq + slide), start + duration);
-    vol.gain.setValueAtTime(0.0001, start);
-    vol.gain.exponentialRampToValueAtTime(gain, start + 0.012);
-    vol.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-    osc.connect(vol).connect(ctx.destination);
-    osc.start(start);
-    osc.stop(start + duration + 0.02);
+
+  play(src, volume) {
+    if (!this.enabled || !src) return;
+    const base = this.cache[src];
+    const audio = base ? base.cloneNode() : new Audio(src);
+    audio.volume = volume == null ? this.volume : volume;
+    const started = audio.play();
+    if (started && started.catch) started.catch(() => {});
   },
-  noise(duration = 0.09, gain = 0.16) {
-    if (!this.enabled) return;
-    const ctx = this.ensure();
-    if (!ctx) return;
-    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
-    const src = ctx.createBufferSource();
-    const vol = ctx.createGain();
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.value = 1400;
-    vol.gain.value = gain;
-    src.buffer = buffer;
-    src.connect(filter).connect(vol).connect(ctx.destination);
-    src.start();
+
+  step() {
+    this.play(SND_STEP[Math.random() < 0.5 ? 0 : 1], this.stepVolume);
   },
-  move() { this.tone(320, 0.09, { type: 'triangle', gain: 0.11 }); this.noise(0.05, 0.05); },
-  capture() { this.noise(0.14, 0.22); this.tone(150, 0.16, { type: 'square', gain: 0.05, slide: -60 }); },
-  castle() { this.tone(420, 0.08, { type: 'triangle', gain: 0.1 }); this.tone(320, 0.1, { type: 'triangle', gain: 0.1, at: 0.1 }); },
-  check() { this.tone(760, 0.1, { type: 'sine', gain: 0.14 }); this.tone(980, 0.16, { type: 'sine', gain: 0.14, at: 0.11 }); },
-  win() { [523, 659, 784, 1046].forEach((f, i) => this.tone(f, 0.2, { gain: 0.1, at: i * 0.12 })); },
-  lose() { [392, 330, 262].forEach((f, i) => this.tone(f, 0.24, { type: 'triangle', gain: 0.1, at: i * 0.14 })); },
-  click() { this.tone(660, 0.04, { type: 'sine', gain: 0.05 }); },
-  select() { this.tone(540, 0.05, { type: 'sine', gain: 0.06 }); },
+
+  move() { this.step(); },
+  capture() { this.step(); },
+  castle() { this.step(); },
+  check() { this.play(SND_CHECK, this.checkVolume); },
+  win() { this.play(SND_CHECK, this.checkVolume); },
+  lose() { this.play(SND_CHECK, this.checkVolume); },
+  click() {},
+  select() {},
+  ensure() {},
 };
+
+Sound.preload();
 /* ---------- сеть ---------- */
 
 async function api(path, options = {}) {
@@ -426,8 +416,8 @@ function renderBoard(spawnMode = false) {
       const sq = FILES[file] + (rank + 1);
       const p = pieceAt(sq);
       if (!p) continue;
-      const cx = col * step + step / 2;
-      const cy = row * step + step / 2;
+      const cx = ORIGIN + col * step + step / 2;
+      const cy = ORIGIN + row * step + step / 2;
       const extra = (spawnMode && sq === extraSquare) ? 'spawn' : '';
       parts.push(pieceMarkup(p, cx, cy, step * 0.88, flip, extra).replace('data-piece="1"', `data-piece="1" data-sq="${sq}"`));
     }
