@@ -421,6 +421,8 @@ def create_app(store: GameStore, bot_token: str = "") -> web.Application:
     app.router.add_get("/", index)
     app.router.add_get("/webapp/", index)
     app.router.add_static("/static/", WEBAPP_DIR, show_index=False)
+    # картинки доски и фигур лежат в корне репозитория рядом с index.html
+    app.router.add_static("/assets/", WEBAPP_DIR / "assets", show_index=False)
     app.router.add_get("/api/health", health)
     app.router.add_post("/api/game/new", api_new)
     app.router.add_post("/api/join/{token}", api_join)

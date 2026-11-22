@@ -54,6 +54,8 @@ svg.board .dot{fill:rgba(30,30,40,.42);pointer-events:none}
 svg.board .ring{fill:none;stroke:rgba(232,155,74,.85);stroke-width:6;pointer-events:none}
 svg.board .arrow{stroke:rgba(232,155,74,.85);stroke-width:5;stroke-linecap:round;fill:none;pointer-events:none}
 svg.board .piece{pointer-events:none}
+svg.board .piece image{image-rendering:pixelated;pointer-events:none}
+svg.board .boardArt{image-rendering:pixelated;pointer-events:none}
 svg.board .piece.animate{will-change:transform}
 svg.board .marks{pointer-events:none}
 svg.board .lastmark{fill:rgba(245,205,120,.32);stroke:rgba(255,222,150,.75);stroke-width:2.5;transition:none}
@@ -167,6 +169,7 @@ fieldset{border:0;padding:0;margin:0}
   <div class="bar">
     <button id="btnFlip" title="Повернуть доску">⤾</button>
     <button id="btnSound" class="soundToggle" title="Звук">🔊</button>
+    <button id="btnTheme" title="Тема доски">🎨</button>
     <button id="btnDraw" class="ghost">Ничья</button>
     <button id="btnResign" class="danger">Сдаться</button>
   </div>
@@ -206,34 +209,26 @@ const state = {
   name: (TG && TG.initDataUnsafe && TG.initDataUnsafe.user && TG.initDataUnsafe.user.first_name) || 'Игрок',
   startParam: (TG && (TG.initDataUnsafe.start_param || TG.initDataUnsafe.startapp)) || new URLSearchParams(location.search).get('startapp') || '',
   isTelegram: Boolean(TG && TG.initData),
+  theme: localStorage.getItem('kosatka_theme') === 'green' ? 'green' : 'wood',
+  localMove: null,
+  oppTimer: null,
 };
 
 const $ = (id) => document.getElementById(id);
 const board = $('board');
 
-/* Векторные фигуры (координаты 0..100): мягкие силуэты, блики и контуры. */
-const GLYPH_PATHS = {
-  P: 'M23 88c-1-6 2-11 8-14 -6-5-9-12-9-20 0-11 8-19 18-24 1-5 3-9 7-11 5-3 11 0 13 5 1 3 1 6 0 9 8 5 13 14 13 24 0 8-3 15-8 20 6 3 9 8 8 14z',
-  R: 'M28 88c-1-5 2-9 7-12v-22l-8-7v-9h4c2-3 5-3 7 0h4c2-3 5-3 7 0h4c2-3 5-3 7 0h4v9l-8 7v22c5 3 8 7 7 12z',
-  N: 'M24 88c-1-6 3-11 9-13 5-2 9-6 12-11 3-6 3-12 0-18-2-4-5-8-9-10l-5 4c-1-3-1-6 1-9 2-4 6-7 10-8l-8-5 6-4c10 2 19 9 24 19 5 11 6 25 5 40-1 8 1 14 3 15z',
-  B: 'M36 84v-9c-6-4-10-10-10-16 0-8 5-15 12-19-3-4-4-8-2-11 2-4 7-5 12-4v-6h4v6c5-1 10 0 12 4 2 3 1 7-2 11 7 4 12 11 12 19 0 6-4 12-10 16v9z',
-  Q: 'M38 86c-1-6 2-11 8-13 3-2 4-5 4-9l-7-24-9 13c-2 3-6 3-8 0-2-3-1-7 2-9l9-6-9-16c-2-4 0-8 4-8 3 0 5 2 6 4l6 12 6-12c1-2 3-4 6-4 3 0 5 2 6 4l6 12 6-12c1-2 3-4 6-4 4 0 6 4 4 8l-9 16 9 6c3 2 4 6 2 9-2 3-6 3-8 0l-9-13-7 24c0 4 1 7 4 9 6 2 9 7 8 13z',
-  K: 'M36 88v-9c-7-4-11-11-11-18 0-6 4-11 9-13-3-5-4-10-3-15 1-5 4-9 8-11v-9h-7v-6h7v-7h4v7h7v6h-7v9c4 2 7 6 8 11 1 5 0 10-3 15 5 2 9 7 9 13 0 7-4 14-11 18v9z',
+/* Темы доски: PNG 176x176 с рамкой 8 px и клетками по 20 px. */
+const THEMES = {
+  wood: { title: 'Дерево', board: 'assets/board/board-01.png' },
+  green: { title: 'Зелень', board: 'assets/board/board-02.png' },
 };
+const PIECE_FILE = { P: 'pawn', N: 'knight', B: 'bishop', R: 'rook', Q: 'queen', K: 'king' };
 
 function pieceMarkup(p, cx, cy, size, flip, extra = '') {
-  const letter = p[1].toUpperCase();
-  const d = GLYPH_PATHS[letter] || GLYPH_PATHS.P;
-  const body = `<path d="${d}"/>`;
-  const white = p[0] === 'w';
-  const fill = white ? '#fdfcf8' : '#23232c';
-  const edge = white ? '#3f2c1e' : '#0a0a10';
-  const scale = size / 100;
-  const angle = flip && p[0] === 'b' ? 180 : 0;
-  return `<g class="piece ${extra}" data-piece="1" transform="translate(${cx - size / 2} ${cy - size / 2}) scale(${scale}) rotate(${angle} 50 50)">`
-    + `<g fill="rgba(0,0,0,.22)" stroke="none" transform="translate(1.8 2.4)">${body}</g>`
-    + `<g fill="none" stroke="${edge}" stroke-width="7" stroke-linejoin="round" stroke-linecap="round">${body}</g>`
-    + `<g fill="${fill}" stroke="none">${body}</g>`
+  const file = PIECE_FILE[p[1].toUpperCase()] || 'pawn';
+  const colour = p[0] === 'w' ? 'white' : 'black';
+  return `<g class="piece ${extra}" data-piece="1" transform="translate(${cx - size / 2} ${cy - size / 2}) scale(${size / 100})">`
+    + `<image href="assets/pieces/${colour}/${file}.png" x="0" y="0" width="100" height="100" preserveAspectRatio="xMidYMid meet"/>`
     + `</g>`;
 }
 
@@ -320,7 +315,7 @@ function squareXY(square, size) {
   const rank = parseInt(square[1], 10) - 1;
   const col = state.perspective === 'w' ? file : 7 - file;
   const row = state.perspective === 'w' ? 7 - rank : rank;
-  return [col * size, row * size];
+  return [ORIGIN + col * size, ORIGIN + row * size];
 }
 
 function pieceAt(square) {
@@ -335,7 +330,12 @@ function legalMovesFrom(square) {
 }
 
 const BOARD_SIZE = 440;
-const CELL = BOARD_SIZE / 8;
+const BOARD_ART = 176;             // размер исходной картинки доски
+const BOARD_FRAME = 8;             // рамка на исходнике, px
+const BOARD_SCALE = BOARD_SIZE / BOARD_ART;
+const ORIGIN = BOARD_FRAME * BOARD_SCALE;   // 20 px — отступ клеток в SVG
+const CELL = (BOARD_SIZE - ORIGIN * 2) / 8; // 50 px на клетку
+const OPPONENT_DELAY = 1000;       // пауза перед ходом Косатки, мс
 
 /* Анимация перемещения: старая позиция → новая, без мигания. */
 function animateMove(move) {
@@ -352,12 +352,12 @@ function animateMove(move) {
   // squareXY отдаёт левый верхний угол клетки, а фигура позиционируется от центра
   const [fcx, fcy] = [fx + CELL / 2, fy + CELL / 2];
   const [tcx, tcy] = [tx + CELL / 2, ty + CELL / 2];
-  const size = CELL * 0.86;
-  const color = ((g.board && g.board[to]) || 'wP')[0];
-  const angle = state.perspective === 'b' && color === 'b' ? 180 : 0;
+  const size = CELL * 0.88;
   // Позиция фигуры живёт в атрибуте transform, поэтому CSS-переход её
   // перезаписывал и фигура прыгала в угол. Ведём атрибут по кадрам вручную.
-  const place = (x, y) => `translate(${x} ${y}) scale(${size / 100}) rotate(${angle} 50 50)`;
+  const place = (x, y) => `translate(${x} ${y}) scale(${size / 100})`;
+  // сразу ставим фигуру в исходную клетку: иначе первый кадр мелькает на целевой
+  el.setAttribute('transform', place(fcx - size / 2, fcy - size / 2));
   const started = performance.now();
   const duration = 190;
   const frame = (now) => {
@@ -385,11 +385,7 @@ function renderBoard(spawnMode = false) {
   const targets = state.selected ? legalMovesFrom(state.selected) : [];
 
   const parts = [];
-  parts.push('<defs>');
-  parts.push('<marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="rgba(232,155,74,.9)"/></marker>');
-  parts.push('<linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff3dc"/><stop offset="1" stop-color="#e4c79a"/></linearGradient>');
-  parts.push('<linearGradient id="dg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a06c44"/><stop offset="1" stop-color="#7a4f2e"/></linearGradient>');
-  parts.push('</defs>');
+  parts.push(`<image class="boardArt" href="${THEMES[state.theme].board}" x="0" y="0" width="${S}" height="${S}" preserveAspectRatio="none"/>`);
 
   for (let row = 0; row < 8; row++) {
     for (let col = 0; col < 8; col++) {
@@ -400,7 +396,7 @@ function renderBoard(spawnMode = false) {
       const classes = ['sq', isLight ? 'light' : 'dark'];
       if (pieceAt(sq)) classes.push('hasPiece');
       if (targets.some((m) => m.slice(2, 4) === sq)) classes.push('dest');
-      parts.push(`<rect class="${classes.join(' ')}" data-sq="${sq}" x="${col * step}" y="${row * step}" width="${step}" height="${step}" fill="${isLight ? 'url(#lg)' : 'url(#dg)'}"/>`);
+      parts.push(`<rect class="${classes.join(' ')}" data-sq="${sq}" x="${ORIGIN + col * step}" y="${ORIGIN + row * step}" width="${step}" height="${step}" fill="transparent"/>`);
     }
   }
 
@@ -433,16 +429,18 @@ function renderBoard(spawnMode = false) {
       const cx = col * step + step / 2;
       const cy = row * step + step / 2;
       const extra = (spawnMode && sq === extraSquare) ? 'spawn' : '';
-      parts.push(pieceMarkup(p, cx, cy, step * 0.86, flip, extra).replace('data-piece="1"', `data-piece="1" data-sq="${sq}"`));
+      parts.push(pieceMarkup(p, cx, cy, step * 0.88, flip, extra).replace('data-piece="1"', `data-piece="1" data-sq="${sq}"`));
     }
   }
 
-  // координаты поверх доски
+  // координаты в рамке вокруг доски
+  const coordY = S - ORIGIN / 2 + 4;
+  const coordX = S - ORIGIN / 2;
   for (let index = 0; index < 8; index++) {
     const letter = state.perspective === 'w' ? FILES[index] : FILES[7 - index];
-    parts.push(`<text class="coord" x="${index * step + 6}" y="${S - 6}">${letter}</text>`);
+    parts.push(`<text class="coord" x="${ORIGIN + index * step + step / 2}" y="${coordY}" text-anchor="middle">${letter}</text>`);
     const number = state.perspective === 'w' ? 8 - index : index + 1;
-    parts.push(`<text class="coord" x="${S - 18}" y="${index * step + 18}">${number}</text>`);
+    parts.push(`<text class="coord" x="${coordX}" y="${ORIGIN + index * step + step / 2 + 4}" text-anchor="middle">${number}</text>`);
   }
 
   board.innerHTML = parts.join('');
@@ -508,17 +506,41 @@ function askPromotion(from, to) {
 }
 
 async function sendMove(uci) {
+  const g = state.game;
+  const from = uci.slice(0, 2);
+  const to = uci.slice(2, 4);
   state.pending = true;
   state.selected = null;
+  // Свой ход показываем сразу: фигура едет по доске, а ответ сервера только
+  // подтверждает позицию — иначе ход появлялся рывком после ожидания сети.
+  if (g && g.board && g.board[from]) {
+    const board = { ...g.board };
+    const piece = board[from];
+    delete board[from];
+    board[to] = uci.length === 5 ? piece[0] + uci[4].toUpperCase() : piece;
+    const optimistic = {
+      ...g,
+      board,
+      yourTurn: false,
+      lastMove: from + to,
+      moves: (g.moves || []).concat([from + to]),
+    };
+    state.localMove = from + to;
+    playMoveSound(g, optimistic);
+    state.game = optimistic;
+    renderBoard();
+    animateMove(from + to);
+  }
   renderStatus();
   try {
-    const g = await api(`/api/game/${state.gameId}/move`, {
+    const updated = await api(`/api/game/${state.gameId}/move`, {
       method: 'POST',
       body: JSON.stringify({ uci }),
     });
-    applyGame(g);
+    applyGame(updated);
     if (TG && TG.HapticFeedback) TG.HapticFeedback.impactOccurred('light');
   } catch (err) {
+    state.localMove = null;
     toast(err.message);
     refresh();
   } finally {
@@ -533,17 +555,35 @@ function applyGame(g) {
   const prev = state.game;
   const prevCount = prev ? (prev.moves || []).length : 0;
   const newCount = (g.moves || []).length;
+  const lastMove = g.lastMove || (g.moves || [])[newCount - 1] || '';
+  const own = Boolean(state.localMove) && lastMove === state.localMove;
+  if (own) state.localMove = null;
+  const fresh = prevCount === 0 && newCount === 0;
+
+  if (newCount > prevCount && !own) {
+    // Ход Косатки придерживаем: видно, что она думает, и ход читается
+    if (state.timer) { clearTimeout(state.timer); state.timer = null; }
+    if (state.oppTimer) clearTimeout(state.oppTimer);
+    state.oppTimer = setTimeout(() => {
+      state.oppTimer = null;
+      commitGame(g, { animate: true, fresh: false });
+    }, OPPONENT_DELAY);
+    return;
+  }
+  commitGame(g, { animate: newCount > prevCount, fresh });
+}
+
+function commitGame(g, { animate = false, fresh = false } = {}) {
+  const prev = state.game;
   state.game = g;
   if (!state.forceFlip) {
     if (g.you) state.perspective = g.you;
     else state.perspective = state.perspective || 'w';
   }
-  if (newCount !== prevCount) state.selected = null;
-
-  const fresh = prevCount === 0 && newCount === 0;
-  renderBoard('spawn');
-  if (newCount > prevCount) {
-    const move = g.lastMove || (g.moves || [])[newCount - 1];
+  if (animate) state.selected = null;
+  renderBoard(fresh ? 'spawn' : false);
+  if (animate) {
+    const move = g.lastMove || (g.moves || [])[(g.moves || []).length - 1];
     const moved = animateMove(move);
     playMoveSound(prev, g);
     if (!moved) flashLast(g);
@@ -696,6 +736,19 @@ function bindActions() {
     });
   }
   document.addEventListener('pointerdown', () => Sound.ensure(), { once: true });
+
+  const themeBtn = $('btnTheme');
+  if (themeBtn) {
+    const syncTheme = () => { themeBtn.title = 'Тема: ' + THEMES[state.theme].title; };
+    syncTheme();
+    themeBtn.addEventListener('click', () => {
+      state.theme = state.theme === 'wood' ? 'green' : 'wood';
+      localStorage.setItem('kosatka_theme', state.theme);
+      syncTheme();
+      renderBoard();
+      Sound.click();
+    });
+  }
 
   $('btnFlip').addEventListener('click', () => {
     state.forceFlip = state.perspective === 'w' ? 'b' : 'w';
