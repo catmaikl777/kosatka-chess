@@ -1,4 +1,4 @@
-"""Хранилище партий и приглашений: SQLite локально, Postgres на сервере.
+﻿"""Хранилище партий и приглашений: SQLite локально, Postgres на сервере.
 
 Источник истины — база: партия переживает перезапуск процесса, а не только
 питается из памяти. Все изменяющие операции идут через транзакцию, поэтому
@@ -58,6 +58,23 @@ CREATE TABLE IF NOT EXISTS messages (
     message_id INTEGER NOT NULL,
     PRIMARY KEY (game_id, user_id)
 );
+
+CREATE TABLE IF NOT EXISTS players (
+    user_id      INTEGER PRIMARY KEY,
+    name         TEXT,
+    pve_games    INTEGER NOT NULL DEFAULT 0,
+    pve_wins     INTEGER NOT NULL DEFAULT 0,
+    pve_losses   INTEGER NOT NULL DEFAULT 0,
+    pve_draws    INTEGER NOT NULL DEFAULT 0,
+    pvp_games    INTEGER NOT NULL DEFAULT 0,
+    pvp_wins     INTEGER NOT NULL DEFAULT 0,
+    pvp_losses   INTEGER NOT NULL DEFAULT 0,
+    pvp_draws    INTEGER NOT NULL DEFAULT 0,
+    resigned     INTEGER NOT NULL DEFAULT 0,
+    moves_made   INTEGER NOT NULL DEFAULT 0,
+    last_played  REAL,
+    first_played REAL
+);
 """
 
 POSTGRES_SCHEMA = """
@@ -95,9 +112,26 @@ CREATE TABLE IF NOT EXISTS messages (
     message_id BIGINT NOT NULL,
     PRIMARY KEY (game_id, user_id)
 );
+
+CREATE TABLE IF NOT EXISTS players (
+    user_id      INTEGER PRIMARY KEY,
+    name         TEXT,
+    pve_games    INTEGER NOT NULL DEFAULT 0,
+    pve_wins     INTEGER NOT NULL DEFAULT 0,
+    pve_losses   INTEGER NOT NULL DEFAULT 0,
+    pve_draws    INTEGER NOT NULL DEFAULT 0,
+    pvp_games    INTEGER NOT NULL DEFAULT 0,
+    pvp_wins     INTEGER NOT NULL DEFAULT 0,
+    pvp_losses   INTEGER NOT NULL DEFAULT 0,
+    pvp_draws    INTEGER NOT NULL DEFAULT 0,
+    resigned     INTEGER NOT NULL DEFAULT 0,
+    moves_made   INTEGER NOT NULL DEFAULT 0,
+    last_played  REAL,
+    first_played REAL
+);
 """
 
-TABLES = ("games", "invites", "messages")
+TABLES = ("games", "invites", "messages", "players")
 
 
 def is_postgres(target: str) -> bool:
@@ -432,6 +466,8 @@ class GameStore:
                     game_id,
                 ),
             )
+            self.record_result(self.get(game_id))
+            self.bump_player(user_id, "moves_made")
             return True, "ok", self.get(game_id)
 
     def after_engine_move(self, game_id: int, uci: str) -> Game | None:
@@ -475,6 +511,8 @@ class GameStore:
                 "UPDATE games SET status = 'finished', result = ?, awaiting_engine = 0, updated_at = ? WHERE id = ?",
                 (f"Сдача соперника — победа: {winner}", time.time(), game_id),
             )
+            self.bump_player(user_id, "resigned")
+            self.record_result(self.get(game_id))
             return True, self.get(game_id)
 
     def offer_draw(self, game_id: int, user_id: int) -> tuple[bool, str, Game | None]:
@@ -493,6 +531,7 @@ class GameStore:
                     "UPDATE games SET status = 'finished', result = 'Ничья по соглашению', updated_at = ? WHERE id = ?",
                     (time.time(), game_id),
                 )
+                self.record_result(self.get(game_id))
                 return True, "Ничья принята.", self.get(game_id)
             self.conn.execute("UPDATE games SET draw_offer_by = ?, updated_at = ? WHERE id = ?",
                               (user_id, time.time(), game_id))
@@ -551,9 +590,9 @@ class GameStore:
         with self.conn.transaction():
             if replace:
                 if self.conn.dialect == "postgres":
-                    self.conn.execute("TRUNCATE messages, invites, games RESTART IDENTITY")
+                    self.conn.execute("TRUNCATE messages, invites, games, players RESTART IDENTITY")
                 else:
-                    for table in ("messages", "invites", "games"):
+                    for table in ("messages", "invites", "games", "players"):
                         self.conn.execute(f"DELETE FROM {table}")
                     self.conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('games')")
             for table in TABLES:
@@ -580,6 +619,97 @@ class GameStore:
                 self.conn.execute("INSERT INTO sqlite_sequence(name, seq) VALUES ('games', ?)",
                                   (_row_value(max_id, "m"),))
         return counts
+
+    # ------------------------------------------------------------------ статистика
+
+    STAT_COLUMNS = (
+        "pve_games", "pve_wins", "pve_losses", "pve_draws",
+        "pvp_games", "pvp_wins", "pvp_losses", "pvp_draws",
+        "resigned", "moves_made",
+    )
+
+    def touch_player(self, user_id: int | None, name: str | None) -> None:
+        if user_id is None:
+            return
+        now = time.time()
+        row = self.conn.execute("SELECT * FROM players WHERE user_id = ?", (user_id,), fetch="one")
+        if row is None:
+            self.conn.execute(
+                """INSERT INTO players (user_id, name, first_played, last_played) VALUES (?, ?, ?, ?)""",
+                (user_id, name, now, now),
+            )
+        else:
+            self.conn.execute(
+                "UPDATE players SET name = COALESCE(?, name), last_played = ? WHERE user_id = ?",
+                (name, now, user_id),
+            )
+
+    def bump_player(self, user_id: int | None, column: str, amount: int = 1) -> None:
+        """Атомарный инкремент счётчика игрока (только из белого списка колонок)."""
+        if user_id is None or column not in self.STAT_COLUMNS:
+            return
+        self.touch_player(user_id, None)
+        self.conn.execute(f"UPDATE players SET {column} = {column} + ? WHERE user_id = ?", (amount, user_id))
+
+    def record_result(self, game: Game) -> None:
+        """После завершения партии пишем результат обоим игрокам."""
+        if not game.result or game.status != "finished":
+            return
+        result = game.result
+        if "Сдача" in result or "мат" in result or "Победа" in result:
+            winner_white = "Белые" in result
+        else:
+            winner_white = None
+        draw = "Ничья" in result
+
+        for user_id, color in ((game.white_id, chess.WHITE), (game.black_id, chess.BLACK)):
+            if user_id is None:
+                continue
+            prefix = "pve" if game.mode == "pve" else "pvp"
+            self.bump_player(user_id, f"{prefix}_games")
+            if draw:
+                self.bump_player(user_id, f"{prefix}_draws")
+            elif winner_white is not None:
+                won = (color == chess.WHITE) == winner_white
+                self.bump_player(user_id, f"{prefix}_wins" if won else f"{prefix}_losses")
+
+    def player_stats(self, user_id: int) -> dict[str, Any]:
+        row = self.conn.execute("SELECT * FROM players WHERE user_id = ?", (user_id,), fetch="one")
+        stats = {key: (_row_value(row, key) or 0) for key in ("user_id", "name", *self.STAT_COLUMNS)}
+        stats["name"] = _row_value(row, "name") if row else None
+        stats["last_played"] = _row_value(row, "last_played") if row else None
+        stats["first_played"] = _row_value(row, "first_played") if row else None
+        for prefix in ("pve", "pvp"):
+            games = stats[f"{prefix}_games"]
+            stats[f"{prefix}_rate"] = round(100 * stats[f"{prefix}_wins"] / games) if games else 0
+        total_games = stats["pve_games"] + stats["pvp_games"]
+        total_wins = stats["pve_wins"] + stats["pvp_wins"]
+        stats["total_games"] = total_games
+        stats["total_wins"] = total_wins
+        stats["total_draws"] = stats["pve_draws"] + stats["pvp_draws"]
+        stats["total_rate"] = round(100 * total_wins / total_games) if total_games else 0
+        return stats
+
+    def top_players(self, limit: int = 5) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """SELECT *, (pve_wins + pvp_wins) AS total_wins,
+                      (pve_games + pvp_games) AS total_games
+               FROM players WHERE (pve_games + pvp_games) > 0
+               ORDER BY total_wins DESC, total_games ASC, user_id ASC LIMIT ?""",
+            (limit,),
+            fetch="all",
+        )
+        return [dict(row) if isinstance(row, dict) else {k: row[k] for k in row.keys()} for row in rows]
+
+    def recent_games(self, user_id: int, limit: int = 5) -> list[Game]:
+        rows = self.conn.execute(
+            """SELECT * FROM games
+               WHERE status = 'finished' AND (white_id = ? OR black_id = ?)
+               ORDER BY updated_at DESC LIMIT ?""",
+            (user_id, user_id, limit),
+            fetch="all",
+        )
+        return [_row_to_game(row) for row in rows]
 
     # ------------------------------------------------------------------ служебное
 

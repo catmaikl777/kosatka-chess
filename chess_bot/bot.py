@@ -14,6 +14,7 @@ import asyncio
 import logging
 import os
 import random
+from datetime import datetime
 
 import chess
 from aiogram import Bot, Dispatcher, F
@@ -91,6 +92,66 @@ HELP_TEXT = (
 )
 
 
+def _pct(part: int, total: int) -> str:
+    return f"{round(100 * part / total)}%" if total else "—"
+
+
+def stats_text(user_id: int) -> str:
+    s = store.player_stats(user_id)
+    name = s.get("name") or "Игрок"
+    lines = [
+        f"📊 <b>Статистика · {name}</b>",
+        "",
+        f"Всего партий: <b>{s['total_games']}</b> · побед <b>{s['total_wins']}</b> "
+        f"({_pct(s['total_wins'], s['total_games'])}) · ничьих {s['total_draws']}",
+        "",
+        "<b>С Косаткой</b>",
+        f"Партий: {s['pve_games']} · побед {s['pve_wins']} ({_pct(s['pve_wins'], s['pve_games'])}) · "
+        f"поражений {s['pve_losses']} · ничьих {s['pve_draws']}",
+        "",
+        "<b>С другом</b>",
+        f"Партий: {s['pvp_games']} · побед {s['pvp_wins']} ({_pct(s['pvp_wins'], s['pvp_games'])}) · "
+        f"поражений {s['pvp_losses']} · ничьих {s['pvp_draws']}",
+        "",
+        f"Ходов сделано: {s['moves_made']} · сдач: {s['resigned']}",
+    ]
+    if s.get("first_played"):
+        first = datetime.fromtimestamp(s["first_played"]).strftime("%d.%m.%Y")
+        last = datetime.fromtimestamp(s["last_played"]).strftime("%d.%m.%Y") if s.get("last_played") else "—"
+        lines.append(f"Первая партия: {first} · последняя: {last}")
+    if not s["total_games"]:
+        lines.append("")
+        lines.append("Партий пока нет — самое время начать.")
+    return "\n".join(lines)
+
+
+def top_text(limit: int = 5) -> str:
+    rows = store.top_players(limit)
+    if not rows:
+        return "🏆 <b>Топ игроков</b>\n\nПока никто не сыграл ни одной партии."
+    medals = ("🥇", "🥈", "🥉", "4)", "5)")
+    lines = ["🏆 <b>Топ игроков по победам</b>", ""]
+    for index, row in enumerate(rows):
+        name = row.get("name") or f"Игрок {row.get('user_id')}"
+        wins = row.get("total_wins") or 0
+        games = row.get("total_games") or 0
+        lines.append(f"{medals[index] if index < len(medals) else '•'} <b>{name}</b> — {wins} побед из {games}")
+    return "\n".join(lines)
+
+
+def history_text(user_id: int, limit: int = 5) -> str:
+    games = store.recent_games(user_id, limit)
+    if not games:
+        return "🕘 <b>История партий</b>\n\nЗавершённых партий пока нет."
+    lines = ["🕘 <b>Последние партии</b>", ""]
+    for game in games:
+        color = game.user_color(user_id)
+        side = "белыми" if color == chess.WHITE else "чёрными"
+        with_whom = "с Косаткой" if game.mode == "pve" else "с другом"
+        moves_count = (len(game.move_list()) + 1) // 2
+        lines.append(f"• #{game.id} · {with_whom} {side} · {game.result} · {moves_count} ходов")
+    return "\n".join(lines)
+
 def back_markup(data: str = "menu:root") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data=data)]])
 
@@ -99,6 +160,8 @@ def menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🐈‍⬛ Играть с Косаткой", callback_data="menu:bot")],
         [InlineKeyboardButton(text="👥 Позвать друга", callback_data="menu:friend")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="stats:me"),
+         InlineKeyboardButton(text="🏆 Топ игроков", callback_data="top:show")],
         [InlineKeyboardButton(text="🐾 Как играть", callback_data="menu:help")],
     ])
 
@@ -374,6 +437,7 @@ def make_dispatcher() -> Dispatcher:
         if game is None:
             await message.answer("Приглашение не найдено или устарело.")
             return
+        store.touch_player(user.id, user.full_name)
         ok, text, game = store.join(game.id, user.id, user.full_name)
         await message.answer(text)
         if game is None:
@@ -401,6 +465,28 @@ def make_dispatcher() -> Dispatcher:
     @dp.message(Command("new"))
     async def new_cmd(message: Message) -> None:
         await message.answer(MENU_TEXT, reply_markup=menu_keyboard())
+
+    @dp.message(Command("stats"))
+    async def stats_cmd(message: Message) -> None:
+        await message.answer(stats_text(message.from_user.id), reply_markup=menu_keyboard())
+
+    @dp.message(Command("top"))
+    async def top_cmd(message: Message) -> None:
+        await message.answer(top_text(), reply_markup=menu_keyboard())
+
+    @dp.message(Command("history"))
+    async def history_cmd(message: Message) -> None:
+        await message.answer(history_text(message.from_user.id), reply_markup=menu_keyboard())
+
+    @dp.callback_query(F.data == "stats:me")
+    async def stats_cb(call: CallbackQuery) -> None:
+        await call.answer()
+        await edit_menu(call, stats_text(call.from_user.id), back_markup())
+
+    @dp.callback_query(F.data == "top:show")
+    async def top_cb(call: CallbackQuery) -> None:
+        await call.answer()
+        await edit_menu(call, top_text(), back_markup())
 
     async def edit_menu(call: CallbackQuery, text: str, markup: InlineKeyboardMarkup) -> None:
         try:
@@ -453,10 +539,20 @@ def make_dispatcher() -> Dispatcher:
         level = int(level_s)
         color = random.choice([chess.WHITE, chess.BLACK]) if color_s == "r" else color_s == "w"
         await call.answer()
+        store.touch_player(call.from_user.id, call.from_user.full_name)
         game = store.create_pve(call.from_user.id, call.from_user.full_name, color, level)
         await send_board(bot, game, call.from_user.id, call.message.chat.id)
         if game.draw_board().turn == chess.BLACK:
             schedule_engine(bot, game.id)
+        url = webapp_url()
+        if url:
+            await call.message.answer(
+                "Партия создана. Играть можно кнопками под доской или открыть доску в вебе — "
+                "эта кнопка есть в меню доски.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🕹 Открыть партию в вебе", web_app=WebAppInfo(url=url)),
+                ]]),
+            )
 
     @dp.callback_query(F.data == "menu:friend")
     async def menu_friend(call: CallbackQuery) -> None:
@@ -474,6 +570,7 @@ def make_dispatcher() -> Dispatcher:
     async def create_pvp(call: CallbackQuery, bot: Bot) -> None:
         color = call.data.split(":")[1] == "w"
         await call.answer()
+        store.touch_player(call.from_user.id, call.from_user.full_name)
         game, token = store.create_pvp(call.from_user.id, call.from_user.full_name, color)
         await send_board(bot, game, call.from_user.id, call.message.chat.id)
         username = (await bot.get_me()).username

@@ -1,4 +1,4 @@
-"""Картинки для бота: шахматная доска в объятиях чёрной кошки Косатки.
+﻿"""Картинки для бота: шахматная доска в объятиях чёрной кошки Косатки.
 
 Рисуется Pillow'ом на лету: фигуры, подсветка хода, рамка с лапками,
 талисман — маленькая чёрная кошка с белой «маской» и носом-пятном
@@ -59,9 +59,21 @@ THEMES = {
         "text": (255, 244, 246),
         "dim": (226, 196, 208),
     },
+    "wood": {
+        "name": "Деревянная",
+        "bg_top": (94, 62, 38),
+        "bg_bottom": (58, 36, 22),
+        "light": (240, 217, 178),
+        "dark": (152, 100, 62),
+        "frame": (58, 34, 20),
+        "accent": (214, 156, 74),
+        "text": (250, 238, 218),
+        "dim": (206, 178, 144),
+        "wood": True,
+    },
 }
-DEFAULT_THEME = "midnight"
-THEME_ORDER = ("midnight", "emerald", "sakura")
+DEFAULT_THEME = "wood"
+THEME_ORDER = ("wood", "midnight", "emerald", "sakura")
 
 BOARD_SIZE = 8
 CELL = 96
@@ -117,6 +129,43 @@ def _gradient(width: int, height: int, top, bottom) -> Image.Image:
         t = y / max(1, height - 1)
         base.putpixel((0, y), tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3)))
     return base.resize((width, height))
+
+
+def _wood_texture(width: int, height: int, top, bottom, seed: int = 7) -> Image.Image:
+    """Деревянный фон: вертикальные волокна, сучки и лёгкие тёмные прожилки."""
+    import random
+
+    img = _gradient(width, height, top, bottom).convert("RGB")
+    pixels = img.load()
+    rng = random.Random(seed)
+    waves = [(rng.uniform(0.004, 0.02), rng.uniform(0, 6.28), rng.uniform(0.5, 2.0)) for _ in range(5)]
+    for x in range(width):
+        shift = sum(amplitude * 9 * __import__("math").sin(x * freq + phase)
+                    for freq, phase, amplitude in waves)
+        for y in range(height):
+            r, g, b = pixels[x, y]
+            grain = int(shift + 4 * __import__("math").sin((y * 0.35) + x * 0.01))
+            factor = 1.0 + grain / 120.0
+            pixels[x, y] = (
+                max(0, min(255, int(r * factor))),
+                max(0, min(255, int(g * factor * 0.985))),
+                max(0, min(255, int(b * factor * 0.96))),
+            )
+    draw = ImageDraw.Draw(img, "RGBA")
+    for _ in range(5):
+        cx, cy = rng.randint(40, width - 40), rng.randint(40, height - 40)
+        radius = rng.randint(6, 16)
+        for ring in range(3, 0, -1):
+            draw.ellipse([cx - radius * ring, cy - radius * ring * 0.55,
+                          cx + radius * ring, cy + radius * ring * 0.55],
+                         outline=(40, 24, 14, 46), width=2)
+    return img
+
+
+def _theme_background(width: int, height: int, theme: dict) -> Image.Image:
+    if theme.get("wood"):
+        return _wood_texture(width, height, theme["bg_top"], theme["bg_bottom"])
+    return _gradient(width, height, theme["bg_top"], theme["bg_bottom"]).convert("RGB")
 
 
 # --------------------------------------------------------------------- фигуры
@@ -403,7 +452,7 @@ def render_board(
     theme = THEMES.get(theme_name, THEMES[DEFAULT_THEME])
     width = SIDE
     height = HEADER + CELL * 8 + FOOTER
-    img = _gradient(width, height, theme["bg_top"], theme["bg_bottom"]).convert("RGB")
+    img = _theme_background(width, height, theme)
     draw = ImageDraw.Draw(img, "RGBA")
 
     # шапка
@@ -530,7 +579,7 @@ def render_board_bytes(board: chess.Board, perspective: bool = chess.WHITE, them
 def render_cover(theme_name: str = DEFAULT_THEME) -> Image.Image:
     theme = THEMES.get(theme_name, THEMES[DEFAULT_THEME])
     width, height = SIDE, 420
-    img = _gradient(width, height, theme["bg_top"], theme["bg_bottom"]).convert("RGB")
+    img = _theme_background(width, height, theme)
     draw = ImageDraw.Draw(img, "RGBA")
     draw_kosatka(draw, width / 2, 150, 190, theme["accent"])
     font_title = _font("bold", 52)

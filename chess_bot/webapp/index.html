@@ -7,22 +7,28 @@
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root{
-  --bg:#18151f;
-  --bg-2:#231d2e;
-  --panel:#2a2335;
-  --panel-2:#332b40;
-  --text:#f3eee6;
-  --dim:#a99fb7;
-  --accent:#e89b4a;
-  --accent-2:#7ed6b0;
-  --light:#e9dbc4;
-  --dark:#7a584e;
-  --ok:#7ed6b0;
-  --bad:#ff8b8b;
+  --bg:#4a2f1c;
+  --bg-2:#35210f;
+  --panel:#5d3c22;
+  --panel-2:#744b2b;
+  --text:#f7e9d2;
+  --dim:#d3b48c;
+  --accent:#e3a95a;
+  --accent-2:#9ecf9a;
+  --light:#f0d9b2;
+  --dark:#98643e;
+  --ok:#9ecf9a;
+  --bad:#ff9d84;
   --radius:18px;
+  --wood-grain:rgba(52,30,14,.16);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+html,body{margin:0;padding:0;color:var(--text);
+  background:
+    repeating-linear-gradient(90deg, var(--wood-grain) 0 2px, transparent 2px 26px),
+    repeating-linear-gradient(0deg, rgba(255,235,200,.05) 0 1px, transparent 1px 7px),
+    linear-gradient(160deg, #6b452a, var(--bg) 45%, var(--bg-2));
+  background-attachment:fixed;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 body{min-height:100vh;min-height:100dvh}
 .app{max-width:560px;margin:0 auto;padding:12px 12px calc(12px + env(safe-area-inset-bottom))}
@@ -33,8 +39,9 @@ header.top{display:flex;align-items:center;gap:10px;margin-bottom:10px}
 .subtitle{font-size:12.5px;color:var(--dim);margin-top:2px}
 .moods{margin-left:auto;font-size:12px;color:var(--accent);text-align:right;max-width:44%;line-height:1.25}
 
-.boardWrap{position:relative;border-radius:var(--radius);padding:8px;background:var(--panel);
-  box-shadow:0 10px 30px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.04)}
+.boardWrap{position:relative;border-radius:var(--radius);padding:8px;
+  background:linear-gradient(150deg,#7a4f2d,#5b391f 60%,#4a2e18);
+  box-shadow:0 12px 34px rgba(20,10,4,.5), inset 0 0 0 1px rgba(255,214,160,.16)}
 svg.board{display:block;width:100%;height:auto;border-radius:12px;touch-action:manipulation}
 svg.board .sq{cursor:default}
 svg.board.playable .sq.hasPiece{cursor:pointer}
@@ -143,7 +150,6 @@ fieldset{border:0;padding:0;margin:0}
   </div>
 
   <div class="bar">
-    <button class="grow primary" id="btnNew">Новая партия</button>
     <button id="btnFlip" title="Повернуть доску">⟳</button>
     <button id="btnDraw" class="ghost">Ничья</button>
     <button id="btnResign" class="danger">Сдаться</button>
@@ -152,48 +158,6 @@ fieldset{border:0;padding:0;margin:0}
 
   <div class="history" id="history">Косатка уже точит когти.</div>
 </div>
-
-<dialog id="dlgStart">
-  <form method="dialog" class="sheet" id="startForm">
-    <h3>Устроим партию?</h3>
-    <p>Косатка садится напротив. Выберите, с кем играть.</p>
-    <div class="levels" id="opponents">
-      <button class="level" type="button" data-mode="pve" aria-pressed="true">
-        <span>
-          <span class="name">С Косаткой</span><br>
-          <span class="desc">ИИ на четырёх уровнях силы</span>
-        </span>
-      </button>
-      <button class="level" type="button" data-mode="pvp" aria-pressed="false">
-        <span>
-          <span class="name">С другом</span><br>
-          <span class="desc">Одна ссылка на двоих</span>
-        </span>
-      </button>
-    </div>
-
-    <div id="pveBlock">
-      <p style="margin-bottom:8px">Уровень Косатки</p>
-      <div class="levels" id="levels">
-        <button class="level" type="button" data-level="1" aria-pressed="false"><span class="name">1 · Новичок</span></button>
-        <button class="level" type="button" data-level="2" aria-pressed="true"><span class="name">2 · Любитель</span></button>
-        <button class="level" type="button" data-level="3" aria-pressed="false"><span class="name">3 · Клубный игрок</span></button>
-        <button class="level" type="button" data-level="4" aria-pressed="false"><span class="name">4 · Мастер</span></button>
-      </div>
-    </div>
-
-    <p style="margin-bottom:8px">Каким цветом?</p>
-    <div class="pick">
-      <button type="button" data-color="w" aria-pressed="true">♙ Белыми</button>
-      <button type="button" data-color="b" aria-pressed="false">♟ Чёрными</button>
-      <button type="button" data-color="r" aria-pressed="false">🎲 Случайно</button>
-    </div>
-    <div class="msg" id="startMsg"></div>
-    <div class="bar" style="margin-top:12px">
-      <button class="primary grow" type="submit" id="startGo">За доску</button>
-    </div>
-  </form>
-</dialog>
 
 <dialog id="dlgPromo">
   <div class="sheet">
@@ -495,7 +459,7 @@ async function refresh() {
     const g = await api(`/api/game/${state.gameId}`);
     applyGame(g);
   } catch (err) {
-    if (err.status === 404) showStart();
+    if (err.status === 404) notInGame();
   }
 }
 
@@ -559,58 +523,6 @@ function renderOverlay() {
   }
 }
 
-/* ---------- меню старта ---------- */
-
-const start = { mode: 'pve', level: 2, color: 'w' };
-
-function bindPicker(container, attr, key, parse = (v) => v) {
-  container.querySelectorAll('button').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      container.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', 'false'));
-      btn.setAttribute('aria-pressed', 'true');
-      start[key] = parse(btn.dataset[attr]);
-      $('pveBlock').style.display = start.mode === 'pve' ? '' : 'none';
-    });
-  });
-}
-
-function bindStart() {
-  $('opponents').querySelectorAll('button').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      $('opponents').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', 'false'));
-      btn.setAttribute('aria-pressed', 'true');
-      start.mode = btn.dataset.mode;
-      $('pveBlock').style.display = start.mode === 'pve' ? '' : 'none';
-    });
-  });
-  bindPicker($('levels'), 'level', 'level', Number);
-  bindPicker($('startForm').querySelector('.pick'), 'color', 'color');
-
-  $('startGo').addEventListener('click', async (event) => {
-    event.preventDefault();
-    $('startMsg').textContent = '';
-    try {
-      const g = await api('/api/game/new', {
-        method: 'POST',
-        body: JSON.stringify({ ...start, playerName: state.name }),
-      });
-      $('dlgStart').close();
-      enterGame(g);
-    } catch (err) {
-      $('startMsg').textContent = err.message;
-    }
-  });
-}
-
-function showStart() {
-  state.gameId = null;
-  state.game = null;
-  if (state.timer) clearTimeout(state.timer);
-  renderOverlay();
-  $('app').classList.add('hidden');
-  $('dlgStart').showModal();
-}
-
 function enterGame(g) {
   $('app').classList.remove('hidden');
   state.gameId = g.id;
@@ -634,7 +546,7 @@ function showJoinLink(url) {
 /* ---------- кнопки ---------- */
 
 function bindActions() {
-  $('btnNew').addEventListener('click', showStart);
+
 
   $('btnFlip').addEventListener('click', () => {
     state.forceFlip = state.perspective === 'w' ? 'b' : 'w';
@@ -642,7 +554,7 @@ function bindActions() {
     renderBoard();
   });
 
-  $('overlayAgain').addEventListener('click', showStart);
+  $('overlayAgain').addEventListener('click', () => toast('Новую партию заведите в Telegram — через бота Косатки'));
 
   $('btnResign').addEventListener('click', async () => {
     if (!state.gameId) return;
@@ -679,7 +591,6 @@ function toast(text) {
 /* ---------- старт ---------- */
 
 async function boot() {
-  bindStart();
   bindActions();
   renderBoard();
 
@@ -687,6 +598,14 @@ async function boot() {
     const params = new URLSearchParams(location.search);
     const asPlayer = params.get('as') || '';
     if (asPlayer) state.name = asPlayer;
+  }
+
+  const gameParam = new URLSearchParams(location.search).get('game');
+  if (gameParam) {
+    try {
+      enterGame(await api(`/api/game/${gameParam}`));
+      return;
+    } catch (err) { /* ниже предложим открыть из бота */ }
   }
 
   if (state.startParam) {
@@ -708,9 +627,30 @@ async function boot() {
       enterGame(last);
       return;
     }
-  } catch (err) { /* нет партии — показываем меню */ }
+  } catch (err) { /* партии нет */ }
 
-  showStart();
+  notInGame();
+}
+
+function notInGame() {
+  state.gameId = null;
+  state.game = null;
+  if (state.timer) clearTimeout(state.timer);
+  const gid = new URLSearchParams(location.search).get('game');
+  if (gid) {
+    api(`/api/game/${gid}`).then(enterGame).catch(() => showMessage('Партия не найдена — заведите новую в Telegram.'));
+    return;
+  }
+  showMessage('Откройте игру из бота Косатки в Telegram: меню «Играть с Косаткой» или «Позвать друга».');
+}
+
+function showMessage(text) {
+  $('overlayTitle').textContent = 'Партии пока нет';
+  $('overlayText').textContent = text;
+  $('overlay').classList.add('show');
+  $('board').innerHTML = '';
+  $('counter').textContent = '';
+  renderBoard();
 }
 
 document.addEventListener('visibilitychange', () => {
