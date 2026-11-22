@@ -341,27 +341,35 @@ const CELL = BOARD_SIZE / 8;
 function animateMove(move) {
   const g = state.game;
   if (!move || move.length < 4) return false;
-  const layer = $('board');
-  const fromX = squareXY(move.slice(0, 2), CELL);
-  const toX = squareXY(move.slice(2, 4), CELL);
-  if (!fromX || !toX) return false;
-  const dx = toX[0] - fromX[0];
-  const dy = toX[1] - fromX[1];
-  if (dx === 0 && dy === 0) return false;
-  const target = layer.querySelector(`.piece[data-sq="${move.slice(2, 4)}"]`);
-  if (!target) return false;
-  target.classList.add('animate');
-  target.style.transition = 'transform 240ms cubic-bezier(.25,.8,.3,1)';
-  target.style.transform = `translate(${-dx}px, ${-dy}px)`;
-  setTimeout(() => {
-    target.style.transition = 'transform 220ms ease-out';
-    target.style.transform = 'translate(0, 0)';
-  }, 250);
-  setTimeout(() => {
-    target.style.transition = '';
-    target.style.transform = '';
-    target.classList.remove('animate');
-  }, 520);
+  const from = move.slice(0, 2);
+  const to = move.slice(2, 4);
+  if (from === to) return false;
+  const el = document.querySelector(`svg.board .piece[data-sq="${to}"]`);
+  if (!el) return false;
+  const [fx, fy] = squareXY(from, CELL);
+  const [tx, ty] = squareXY(to, CELL);
+  if (fx === tx && fy === ty) return false;
+  // squareXY отдаёт левый верхний угол клетки, а фигура позиционируется от центра
+  const [fcx, fcy] = [fx + CELL / 2, fy + CELL / 2];
+  const [tcx, tcy] = [tx + CELL / 2, ty + CELL / 2];
+  const size = CELL * 0.86;
+  const color = ((g.board && g.board[to]) || 'wP')[0];
+  const angle = state.perspective === 'b' && color === 'b' ? 180 : 0;
+  // Позиция фигуры живёт в атрибуте transform, поэтому CSS-переход её
+  // перезаписывал и фигура прыгала в угол. Ведём атрибут по кадрам вручную.
+  const place = (x, y) => `translate(${x} ${y}) scale(${size / 100}) rotate(${angle} 50 50)`;
+  const started = performance.now();
+  const duration = 190;
+  const frame = (now) => {
+    const k = Math.min(1, (now - started) / duration);
+    const eased = 1 - Math.pow(1 - k, 3);
+    el.setAttribute(
+      'transform',
+      place(fcx + (tcx - fcx) * eased - size / 2, fcy + (tcy - fcy) * eased - size / 2)
+    );
+    if (k < 1) requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
   return true;
 }
 

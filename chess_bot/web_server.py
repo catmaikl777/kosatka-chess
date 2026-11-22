@@ -262,6 +262,10 @@ def game_by_key(key: str) -> Game | None:
 
 
 STORE: GameStore
+# Партии, ход бота для которых уже считается в этом процессе. Флаг
+# awaiting_engine в базе означает «ход за ботом», а не «уже считаю», поэтому
+# отдельный набор: иначе после хода человека бот молча ждал бы сам себя.
+ENGINE_BUSY: set[int] = set()
 
 
 async def engine_move_async(game_id: int) -> Game | None:
@@ -271,12 +275,14 @@ async def engine_move_async(game_id: int) -> Game | None:
     board = game.draw_board()
     human_color = chess.WHITE if game.white_id else chess.BLACK
     if board.turn == human_color:
+        STORE.clear_engine_pending(game_id)
         return game
-    if game.awaiting_engine:
-        # уже считаем ход в другом запросе — второй расчёт не нужен
+    if game_id in ENGINE_BUSY:
+        # уже считаем этот ход в другом запросе — второй расчёт не нужен
         return game
     import asyncio
 
+    ENGINE_BUSY.add(game_id)
     STORE.mark_engine_pending(game_id)
     try:
         move = await asyncio.to_thread(choose_move, board.copy(), game.level or 2)
@@ -284,6 +290,8 @@ async def engine_move_async(game_id: int) -> Game | None:
         log.exception("Движок не смог выбрать ход в партии %s", game_id)
         STORE.clear_engine_pending(game_id)
         return game
+    finally:
+        ENGINE_BUSY.discard(game_id)
     return STORE.after_engine_move(game_id, move.uci())
 
 
