@@ -16,9 +16,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "webapp"
 SOURCE_FILES = [ROOT / "chess_bot" / "webapp" / "index.html"]
+# Pages отдаёт index.html из корня репозитория, а webapp/ нужен как отдельная
+# папка для прямых ссылок. Пишем в оба места, иначе они расходятся и корень
+# остаётся с пустым адресом API — веб-апп тогда ищет партию на github.io.
+TARGETS = (ROOT / "index.html", OUT_DIR / "index.html")
 
 
-def build(api_url: str) -> Path:
+def build(api_url: str) -> list[Path]:
     source = SOURCE_FILES[0].read_text(encoding="utf-8")
     api = api_url.rstrip("/")
     text = source.replace("window.KOSATKA_API || ''", f"'{api}'")
@@ -32,9 +36,11 @@ def build(api_url: str) -> Path:
     )
     text = re.sub(r"\n\s*\n+", "\n\n", text)
     OUT_DIR.mkdir(exist_ok=True)
-    target = OUT_DIR / "index.html"
-    target.write_text(text, encoding="utf-8")
-    return target
+    written: list[Path] = []
+    for target in TARGETS:
+        target.write_text(text, encoding="utf-8")
+        written.append(target)
+    return written
 
 
 def main() -> None:
@@ -46,8 +52,9 @@ def main() -> None:
     if not args.api.startswith("https://"):
         raise SystemExit("API должен быть по HTTPS: Telegram не примет http")
     target = build(args.api)
-    size = target.stat().st_size
-    print(f"Собрано: {target} ({size} байт), API: {args.api.rstrip('/')}")
+    size = target[0].stat().st_size
+    places = ", ".join(str(path.relative_to(ROOT)) for path in target)
+    print(f"Собрано: {places} ({size} байт), API: {args.api.rstrip('/')}")
 
 
 if __name__ == "__main__":

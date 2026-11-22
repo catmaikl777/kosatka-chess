@@ -123,6 +123,7 @@ fieldset{border:0;padding:0;margin:0}
 .toast *,button{user-select:none}
 .app.hidden{display:none}
 </style>
+<link rel="preconnect" href="https://kosatka-api.onrender.com" crossorigin>
 </head>
 <body>
 <div class="app" id="app">
@@ -190,7 +191,7 @@ fieldset{border:0;padding:0;margin:0}
 const TG = window.Telegram ? window.Telegram.WebApp : null;
 if (TG) { try { TG.ready(); TG.expand(); TG.setHeaderColor('#18151f'); TG.setBackgroundColor('#18151f'); } catch (e) {} }
 
-const API = (window.KOSATKA_API || '').replace(/\/+$/, '');
+const API = ('https://kosatka-api.onrender.com').replace(/\/+$/, '');
 const POLL_MS = 1200;
 
 const state = {
@@ -671,7 +672,6 @@ function showJoinLink(url) {
 /* ---------- кнопки ---------- */
 
 function bindActions() {
-
 
   const soundBtn = $('btnSound');
   if (soundBtn) {

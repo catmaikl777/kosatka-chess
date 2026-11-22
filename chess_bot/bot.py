@@ -15,6 +15,7 @@ import logging
 import os
 import random
 from datetime import datetime
+from urllib.parse import quote
 
 import chess
 from aiogram import Bot, Dispatcher, F
@@ -241,20 +242,25 @@ def game_caption(game: Game, viewer_id: int | None, highlight: int | None = None
     return "\n".join(lines)
 
 
-def webapp_url(start: str | None = None) -> str | None:
+def webapp_url(start: str | None = None, game_id: int | None = None) -> str | None:
     """Адрес игры из WEBAPP_URL. Telegram требует https, поэтому без него кнопки нет."""
-    base = os.environ.get("WEBAPP_URL", "").strip().rstrip("/")
+    base = os.environ.get("WEBAPP_URL", "").strip()
     if not base:
         return None
-    if not base.endswith("/"):
+    if not base.endswith("/") and "?" not in base:
         base += "/"
+    params: list[str] = []
+    if game_id is not None:
+        params.append(f"game={game_id}")
     if start:
-        base += f"?startapp={start}"
+        params.append(f"startapp={quote(start)}")
+    if params:
+        base += ("&" if "?" in base else "?") + "&".join(params)
     return base
 
 
 def keyboard_for(game: Game, viewer_id: int | None) -> InlineKeyboardMarkup:
-    url = webapp_url()
+    url = webapp_url(game_id=game.id)
     play_row = [InlineKeyboardButton(text="🕹 Играть в вебе", web_app=WebAppInfo(url=url))] if url else []
 
     if game.status == "waiting":
@@ -548,7 +554,7 @@ def make_dispatcher() -> Dispatcher:
         await send_board(bot, game, call.from_user.id, call.message.chat.id)
         if game.draw_board().turn == chess.BLACK:
             schedule_engine(bot, game.id)
-        url = webapp_url()
+        url = webapp_url(game_id=game.id)
         if url:
             await call.message.answer(
                 "Партия создана. Играть можно кнопками под доской или открыть доску в вебе — "
