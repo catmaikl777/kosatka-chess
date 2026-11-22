@@ -272,11 +272,30 @@ async def engine_move_async(game_id: int) -> Game | None:
     human_color = chess.WHITE if game.white_id else chess.BLACK
     if board.turn == human_color:
         return game
+    if game.awaiting_engine:
+        # уже считаем ход в другом запросе — второй расчёт не нужен
+        return game
     import asyncio
 
     STORE.mark_engine_pending(game_id)
-    move = await asyncio.to_thread(choose_move, board.copy(), game.level or 2)
+    try:
+        move = await asyncio.to_thread(choose_move, board.copy(), game.level or 2)
+    except Exception:  # noqa: BLE001 — бот не должен вешать партию
+        log.exception("Движок не смог выбрать ход в партии %s", game_id)
+        STORE.clear_engine_pending(game_id)
+        return game
     return STORE.after_engine_move(game_id, move.uci())
+
+
+async def maybe_engine_move(game: Game | None) -> Game | None:
+    """Досчитывает ход бота, если сейчас его очередь (партию создали в боте)."""
+    if game is None or game.mode != "pve" or game.status != "active":
+        return game
+    board = game.draw_board()
+    human_color = chess.WHITE if game.white_id else chess.BLACK
+    if board.turn == human_color:
+        return game
+    return await engine_move_async(game.id) or game
 
 
 # --------------------------------------------------------------------- маршруты
@@ -307,8 +326,10 @@ async def api_new(request: web.Request) -> web.Response:
             level = 2
         game = STORE.create_pve(viewer.user_id, name, color, level)
 
-    if game.mode == "pve" and game.draw_board().turn == chess.BLACK:
-        game = await engine_move_async(game.id) or game
+    if game.mode == "pve":
+        # Если человек выбрал чёрных, первый ход за Косаткой — считаем сразу,
+        # иначе доска откроется на позиции, где никто не может ходить.
+        game = await maybe_engine_move(game) or game
     return web.json_response(game_payload(game, viewer))
 
 
@@ -334,7 +355,7 @@ async def api_last(request: web.Request) -> web.Response:
     games = STORE.user_games(viewer.user_id, limit=1)
     if not games:
         return web.json_response({})
-    game = STORE.get(games[0].id)
+    game = await maybe_engine_move(STORE.get(games[0].id))
     return web.json_response(game_payload(game, viewer))
 
 
@@ -343,6 +364,7 @@ async def api_game(request: web.Request) -> web.Response:
     game = game_by_key(request.match_info["key"])
     if game is None:
         return web.json_response({"error": "Партия не найдена"}, status=404)
+    game = await maybe_engine_move(game)
     return web.json_response(game_payload(game, viewer))
 
 

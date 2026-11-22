@@ -223,15 +223,18 @@ const GLYPH_PATHS = {
 
 function pieceMarkup(p, cx, cy, size, flip, extra = '') {
   const letter = p[1].toUpperCase();
-  const body = GLYPH_PATHS[letter] || GLYPH_PATHS.P;
+  const d = GLYPH_PATHS[letter] || GLYPH_PATHS.P;
+  const body = `<path d="${d}"/>`;
   const white = p[0] === 'w';
-  const fill = white ? '#fbfaf6' : '#1a1a21';
-  const stroke = white ? '#4d3a2c' : '#07070b';
+  const fill = white ? '#fdfcf8' : '#23232c';
+  const edge = white ? '#3f2c1e' : '#0a0a10';
   const scale = size / 100;
   const angle = flip && p[0] === 'b' ? 180 : 0;
-  return `<g class="piece ${extra}" data-piece="1" transform="translate(${cx - size / 2} ${cy - size / 2}) scale(${scale}) rotate(${angle} 50 50)" `
-    + `fill="${fill}" stroke="${stroke}" stroke-width="${white ? 3.4 : 2.4}" stroke-linejoin="round" `
-    + `paint-order="stroke fill" style="filter:drop-shadow(0 1.5px 1px rgba(0,0,0,.45))">${body}</g>`;
+  return `<g class="piece ${extra}" data-piece="1" transform="translate(${cx - size / 2} ${cy - size / 2}) scale(${scale}) rotate(${angle} 50 50)">`
+    + `<g fill="rgba(0,0,0,.22)" stroke="none" transform="translate(1.8 2.4)">${body}</g>`
+    + `<g fill="none" stroke="${edge}" stroke-width="7" stroke-linejoin="round" stroke-linecap="round">${body}</g>`
+    + `<g fill="${fill}" stroke="none">${body}</g>`
+    + `</g>`;
 }
 
 /* ---------- звук (WebAudio, без файлов) ---------- */
