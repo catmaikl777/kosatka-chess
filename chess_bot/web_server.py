@@ -30,7 +30,7 @@ from .app.store import Game, GameStore
 
 log = logging.getLogger("chess_bot.web")
 
-WEBAPP_DIR = Path(__file__).parent.parent / "webapp"
+WEBAPP_DIR = Path(__file__).parent.parent
 
 LEVEL_DESC = {
     1: "Новичок",
