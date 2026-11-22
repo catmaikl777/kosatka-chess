@@ -1,26 +1,35 @@
-"""Хранилище партий и приглашений в SQLite.
+"""Хранилище партий и приглашений: SQLite локально, Postgres на сервере.
 
 Источник истины — база: партия переживает перезапуск процесса, а не только
 питается из памяти. Все изменяющие операции идут через транзакцию, поэтому
 два одновременных клика не могут сходить дважды.
+
+Какой движок выбрать:
+    GameStore("chess_bot.db")                  # SQLite (по умолчанию)
+    GameStore("postgresql://user:pw@host/db")  # Postgres (Render, VPS)
+    GameStore.from_env()                       # DATABASE_URL или CHESS_DB
 """
 
 from __future__ import annotations
 
+import os
 import secrets
 import sqlite3
 import time
 from dataclasses import dataclass
+from typing import Any, Iterable, Sequence
 
 import chess
 
-SCHEMA = """
+# Типы колонок под каждый движок: в Postgres int8 нужен для Telegram ID
+# (у пользователей бывают id больше 2^31) и float8 для времени.
+SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS games (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    mode          TEXT    NOT NULL,              -- pvp | pve
-    status        TEXT    NOT NULL,              -- waiting | active | finished
+    mode          TEXT    NOT NULL,
+    status        TEXT    NOT NULL,
     fen           TEXT    NOT NULL,
-    moves         TEXT    NOT NULL DEFAULT '',   -- UCI через пробел, нужен для ничьей по повторению
+    moves         TEXT    NOT NULL DEFAULT '',
     level         INTEGER,
     white_id      INTEGER,
     black_id      INTEGER,
@@ -36,13 +45,12 @@ CREATE TABLE IF NOT EXISTS games (
 );
 
 CREATE TABLE IF NOT EXISTS invites (
-    token     TEXT PRIMARY KEY,
-    game_id   INTEGER NOT NULL,
-    host_id   INTEGER NOT NULL,
-    created_at REAL   NOT NULL
+    token      TEXT PRIMARY KEY,
+    game_id    INTEGER NOT NULL,
+    host_id    INTEGER NOT NULL,
+    created_at REAL    NOT NULL
 );
 
--- у каждого игрока своя доска в своём чате, поэтому и message_id свой
 CREATE TABLE IF NOT EXISTS messages (
     game_id    INTEGER NOT NULL,
     user_id    INTEGER NOT NULL,
@@ -51,6 +59,49 @@ CREATE TABLE IF NOT EXISTS messages (
     PRIMARY KEY (game_id, user_id)
 );
 """
+
+POSTGRES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS games (
+    id            BIGSERIAL PRIMARY KEY,
+    mode          TEXT   NOT NULL,
+    status        TEXT   NOT NULL,
+    fen           TEXT   NOT NULL,
+    moves         TEXT   NOT NULL DEFAULT '',
+    level         INTEGER,
+    white_id      BIGINT,
+    black_id      BIGINT,
+    white_name    TEXT,
+    black_name    TEXT,
+    host_id       BIGINT NOT NULL,
+    result        TEXT,
+    chat_id       BIGINT,
+    message_id    BIGINT,
+    draw_offer_by BIGINT,
+    awaiting_engine INTEGER NOT NULL DEFAULT 0,
+    updated_at    DOUBLE PRECISION NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS invites (
+    token      TEXT PRIMARY KEY,
+    game_id    BIGINT NOT NULL,
+    host_id    BIGINT NOT NULL,
+    created_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    game_id    BIGINT NOT NULL,
+    user_id    BIGINT NOT NULL,
+    chat_id    BIGINT NOT NULL,
+    message_id BIGINT NOT NULL,
+    PRIMARY KEY (game_id, user_id)
+);
+"""
+
+TABLES = ("games", "invites", "messages")
+
+
+def is_postgres(target: str) -> bool:
+    return target.startswith(("postgres://", "postgresql://"))
 
 
 @dataclass
@@ -75,8 +126,7 @@ class Game:
 
     @property
     def board(self) -> chess.Board:
-        board = chess.Board(self.fen)
-        return board
+        return chess.Board(self.fen)
 
     def move_list(self) -> list[str]:
         return self.moves.split() if self.moves else []
@@ -107,60 +157,167 @@ class Game:
         return board
 
 
-def _row_to_game(row: sqlite3.Row) -> Game:
+_UNSET = object()
+
+
+class _SqliteConn:
+    """Тот же интерфейс, что у обёртки Postgres: execute/fetch и транзакции."""
+
+    dialect = "sqlite"
+
+    def __init__(self, path: str) -> None:
+        self.conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.executescript(SQLITE_SCHEMA)
+
+    def execute(self, sql: str, params: Sequence[Any] = (), *, fetch: str | None = None):
+        cursor = self.conn.execute(sql, tuple(params))
+        if fetch == "one":
+            return cursor.fetchone()
+        if fetch == "all":
+            return cursor.fetchall()
+        return cursor
+
+    def transaction(self):
+        return _Transaction(self.conn, "BEGIN IMMEDIATE", "COMMIT", "ROLLBACK")
+
+    def table_rows(self, table: str) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.conn.execute(f"SELECT * FROM {table}")]
+
+    def close(self) -> None:
+        self.conn.close()
+
+
+class _Transaction:
+    def __init__(self, conn, begin: str, commit: str, rollback: str) -> None:
+        self._conn = conn
+        self._begin, self._commit, self._rollback = begin, commit, rollback
+
+    def __enter__(self):
+        self._conn.execute(self._begin)
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if exc_type is None:
+            self._conn.execute(self._commit)
+        else:
+            self._conn.execute(self._rollback)
+        return False
+
+
+class _PostgresConn:
+    """Обёртка psycopg3: ? → %s, транзакция на каждый вызов."""
+
+    dialect = "postgres"
+
+    def __init__(self, dsn: str) -> None:
+        import psycopg  # импорт здесь, чтобы SQLite-режим не требовал psycopg
+        from psycopg.rows import dict_row
+
+        self._psycopg = psycopg
+        self.conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=True)
+        with self.conn.cursor() as cur:
+            cur.execute(POSTGRES_SCHEMA)
+
+    @staticmethod
+    def _sql(sql: str) -> str:
+        return sql.replace("?", "%s")
+
+    def execute(self, sql: str, params: Sequence[Any] = (), *, fetch: str | None = None):
+        with self.conn.cursor() as cur:
+            cur.execute(self._sql(sql), tuple(params))
+            if fetch == "one":
+                return cur.fetchone()
+            if fetch == "all":
+                return cur.fetchall()
+            return None
+
+    def transaction(self):
+        return _Transaction(self.conn, "BEGIN", "COMMIT", "ROLLBACK")
+
+    def table_rows(self, table: str) -> list[dict[str, Any]]:
+        with self.conn.cursor() as cur:
+            cur.execute(f"SELECT * FROM {table} ORDER BY 1")
+            return list(cur.fetchall())
+
+    def close(self) -> None:
+        self.conn.close()
+
+
+def _row_value(row: Any, key: str) -> Any:
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row.get(key)
+    return row[key]
+
+
+def _row_to_game(row: Any) -> Game:
     return Game(
-        id=row["id"],
-        mode=row["mode"],
-        status=row["status"],
-        fen=row["fen"],
-        moves=row["moves"],
-        level=row["level"],
-        white_id=row["white_id"],
-        black_id=row["black_id"],
-        white_name=row["white_name"],
-        black_name=row["black_name"],
-        host_id=row["host_id"],
-        result=row["result"],
-        chat_id=row["chat_id"],
-        message_id=row["message_id"],
-        draw_offer_by=row["draw_offer_by"],
-        awaiting_engine=row["awaiting_engine"],
-        updated_at=row["updated_at"],
+        id=_row_value(row, "id"),
+        mode=_row_value(row, "mode"),
+        status=_row_value(row, "status"),
+        fen=_row_value(row, "fen"),
+        moves=_row_value(row, "moves"),
+        level=_row_value(row, "level"),
+        white_id=_row_value(row, "white_id"),
+        black_id=_row_value(row, "black_id"),
+        white_name=_row_value(row, "white_name"),
+        black_name=_row_value(row, "black_name"),
+        host_id=_row_value(row, "host_id"),
+        result=_row_value(row, "result"),
+        chat_id=_row_value(row, "chat_id"),
+        message_id=_row_value(row, "message_id"),
+        draw_offer_by=_row_value(row, "draw_offer_by"),
+        awaiting_engine=_row_value(row, "awaiting_engine"),
+        updated_at=float(_row_value(row, "updated_at") or 0),
     )
 
 
 class GameStore:
-    def __init__(self, path: str = "chess_bot.db") -> None:
-        self.conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.executescript(SCHEMA)
+    def __init__(self, target: str = "chess_bot.db") -> None:
+        self.target = target
+        self.dialect = "postgres" if is_postgres(target) else "sqlite"
+        self.conn = _PostgresConn(target) if self.dialect == "postgres" else _SqliteConn(target)
+
+    @classmethod
+    def from_env(cls, default: str = "chess_bot.db") -> "GameStore":
+        """DATABASE_URL (Render) важнее CHESS_DB (локальный путь к SQLite)."""
+        target = os.environ.get("DATABASE_URL") or os.environ.get("CHESS_DB") or default
+        return cls(target)
 
     # ------------------------------------------------------------------ создание
+
+    def _insert_id(self, sql: str, params: Sequence[Any]) -> int:
+        if self.conn.dialect == "postgres":
+            row = self.conn.execute(sql + " RETURNING id", params, fetch="one")
+            return int(_row_value(row, "id"))
+        cursor = self.conn.execute(sql, params)
+        return int(cursor.lastrowid)
 
     def create_pve(self, user_id: int, user_name: str, color: bool, level: int) -> Game:
         board = chess.Board()
         white_id, black_id = (user_id, None) if color else (None, user_id)
         white_name, black_name = (user_name, "Бот") if color else ("Бот", user_name)
-        cursor = self.conn.execute(
+        game_id = self._insert_id(
             """INSERT INTO games (mode, status, fen, level, white_id, black_id, white_name,
                                   black_name, host_id, updated_at)
                VALUES ('pve', 'active', ?, ?, ?, ?, ?, ?, ?, ?)""",
             (board.fen(), level, white_id, black_id, white_name, black_name, user_id, time.time()),
         )
-        return self.get(cursor.lastrowid)
+        return self.get(game_id)
 
     def create_pvp(self, host_id: int, host_name: str, color: bool) -> tuple[Game, str]:
         board = chess.Board()
         white_id, black_id = (host_id, None) if color else (None, host_id)
         white_name, black_name = (host_name, None) if color else (None, host_name)
-        cursor = self.conn.execute(
+        game_id = self._insert_id(
             """INSERT INTO games (mode, status, fen, white_id, black_id, white_name,
                                   black_name, host_id, updated_at)
                VALUES ('pvp', 'waiting', ?, ?, ?, ?, ?, ?, ?)""",
             (board.fen(), white_id, black_id, white_name, black_name, host_id, time.time()),
         )
-        game_id = cursor.lastrowid
         token = secrets.token_urlsafe(12)
         self.conn.execute(
             "INSERT INTO invites (token, game_id, host_id, created_at) VALUES (?, ?, ?, ?)",
@@ -171,14 +328,20 @@ class GameStore:
     # ------------------------------------------------------------------ чтение
 
     def get(self, game_id: int) -> Game | None:
-        row = self.conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+        row = self.conn.execute("SELECT * FROM games WHERE id = ?", (game_id,), fetch="one")
         return _row_to_game(row) if row else None
 
     def invite_by_token(self, token: str) -> Game | None:
         row = self.conn.execute(
-            "SELECT g.* FROM invites i JOIN games g ON g.id = i.game_id WHERE i.token = ?", (token,)
-        ).fetchone()
+            "SELECT g.* FROM invites i JOIN games g ON g.id = i.game_id WHERE i.token = ?",
+            (token,),
+            fetch="one",
+        )
         return _row_to_game(row) if row else None
+
+    def token_for_game(self, game_id: int) -> str | None:
+        row = self.conn.execute("SELECT token FROM invites WHERE game_id = ?", (game_id,), fetch="one")
+        return _row_value(row, "token") if row else None
 
     def user_games(self, user_id: int, limit: int = 5) -> list[Game]:
         rows = self.conn.execute(
@@ -186,18 +349,17 @@ class GameStore:
                WHERE status IN ('waiting', 'active') AND (white_id = ? OR black_id = ?)
                ORDER BY updated_at DESC LIMIT ?""",
             (user_id, user_id, limit),
-        ).fetchall()
+            fetch="all",
+        )
         return [_row_to_game(row) for row in rows]
 
     # ------------------------------------------------------------------ PvP
 
     def join(self, game_id: int, user_id: int, user_name: str) -> tuple[bool, str, Game | None]:
-        self.conn.execute("BEGIN IMMEDIATE")
-        try:
-            row = self.conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
-            if row is None:
+        with self.conn.transaction():
+            game = self.get(game_id)
+            if game is None:
                 return False, "Партия не найдена.", None
-            game = _row_to_game(row)
             if game.mode != "pvp":
                 return False, "Это не партия для двоих.", game
             if user_id in (game.white_id, game.black_id):
@@ -211,12 +373,9 @@ class GameStore:
                 self.conn.execute("UPDATE games SET black_id = ?, black_name = ?, status = 'active', updated_at = ? WHERE id = ?",
                                   (user_id, user_name, time.time(), game_id))
             return True, "Вы присоединились к партии.", self.get(game_id)
-        finally:
-            self.conn.execute("COMMIT")
 
     def cancel(self, game_id: int, user_id: int) -> bool:
-        self.conn.execute("BEGIN IMMEDIATE")
-        try:
+        with self.conn.transaction():
             game = self.get(game_id)
             if game is None or game.host_id != user_id or game.status != "waiting":
                 return False
@@ -225,14 +384,11 @@ class GameStore:
                 (time.time(), game_id),
             )
             return True
-        finally:
-            self.conn.execute("COMMIT")
 
     # ------------------------------------------------------------------ ходы
 
     def apply_move(self, game_id: int, user_id: int | None, uci: str) -> tuple[bool, str, Game | None]:
-        self.conn.execute("BEGIN IMMEDIATE")
-        try:
+        with self.conn.transaction():
             game = self.get(game_id)
             if game is None:
                 return False, "Партия не найдена.", None
@@ -277,17 +433,17 @@ class GameStore:
                 ),
             )
             return True, "ok", self.get(game_id)
-        finally:
-            self.conn.execute("COMMIT")
 
     def after_engine_move(self, game_id: int, uci: str) -> Game | None:
-        self.conn.execute("BEGIN IMMEDIATE")
-        try:
+        with self.conn.transaction():
             game = self.get(game_id)
             if game is None:
                 return None
             board = game.draw_board()
-            move = chess.Move.from_uci(uci)
+            try:
+                move = chess.Move.from_uci(uci)
+            except ValueError:
+                return game
             if move not in board.legal_moves:
                 return game
             board.push(move)
@@ -305,12 +461,9 @@ class GameStore:
                 ),
             )
             return self.get(game_id)
-        finally:
-            self.conn.execute("COMMIT")
 
     def resign(self, game_id: int, user_id: int) -> tuple[bool, Game | None]:
-        self.conn.execute("BEGIN IMMEDIATE")
-        try:
+        with self.conn.transaction():
             game = self.get(game_id)
             if game is None or game.status != "active":
                 return False, game
@@ -323,12 +476,9 @@ class GameStore:
                 (f"Сдача соперника — победа: {winner}", time.time(), game_id),
             )
             return True, self.get(game_id)
-        finally:
-            self.conn.execute("COMMIT")
 
     def offer_draw(self, game_id: int, user_id: int) -> tuple[bool, str, Game | None]:
-        self.conn.execute("BEGIN IMMEDIATE")
-        try:
+        with self.conn.transaction():
             game = self.get(game_id)
             if game is None or game.status != "active":
                 return False, "Партия не идёт.", game
@@ -347,8 +497,6 @@ class GameStore:
             self.conn.execute("UPDATE games SET draw_offer_by = ?, updated_at = ? WHERE id = ?",
                               (user_id, time.time(), game_id))
             return True, "Предложение ничьей отправлено.", self.get(game_id)
-        finally:
-            self.conn.execute("COMMIT")
 
     def decline_draw(self, game_id: int, user_id: int) -> tuple[bool, Game | None]:
         game = self.get(game_id)
@@ -362,14 +510,76 @@ class GameStore:
         self.conn.execute("UPDATE games SET chat_id = ?, message_id = ? WHERE id = ?",
                           (chat_id, message_id, game_id))
 
+    def remember_message(self, game_id: int, user_id: int, chat_id: int, message_id: int) -> None:
+        if self.conn.dialect == "postgres":
+            sql = """INSERT INTO messages (game_id, user_id, chat_id, message_id) VALUES (?, ?, ?, ?)
+                     ON CONFLICT (game_id, user_id) DO UPDATE SET chat_id = EXCLUDED.chat_id,
+                                                                  message_id = EXCLUDED.message_id"""
+        else:
+            sql = """INSERT INTO messages (game_id, user_id, chat_id, message_id) VALUES (?, ?, ?, ?)
+                     ON CONFLICT(game_id, user_id) DO UPDATE SET chat_id = excluded.chat_id,
+                                                                 message_id = excluded.message_id"""
+        self.conn.execute(sql, (game_id, user_id, chat_id, message_id))
+
+    def known_messages(self, game_id: int) -> list[tuple[int, int, int]]:
+        rows = self.conn.execute(
+            "SELECT user_id, chat_id, message_id FROM messages WHERE game_id = ?", (game_id,), fetch="all"
+        )
+        return [(_row_value(row, "user_id"), _row_value(row, "chat_id"), _row_value(row, "message_id")) for row in rows]
+
     def pending_engine_games(self) -> list[Game]:
         rows = self.conn.execute(
-            "SELECT * FROM games WHERE mode = 'pve' AND status = 'active' AND awaiting_engine = 1"
-        ).fetchall()
+            "SELECT * FROM games WHERE mode = 'pve' AND status = 'active' AND awaiting_engine = 1", fetch="all"
+        )
         return [_row_to_game(row) for row in rows]
 
     def mark_engine_pending(self, game_id: int) -> None:
         self.conn.execute("UPDATE games SET awaiting_engine = 1 WHERE id = ?", (game_id,))
+
+    def clear_engine_pending(self, game_id: int) -> None:
+        self.conn.execute("UPDATE games SET awaiting_engine = 0 WHERE id = ?", (game_id,))
+
+    # ------------------------------------------------------------------ перенос данных
+
+    def export_tables(self) -> dict[str, list[dict[str, Any]]]:
+        return {table: self.conn.table_rows(table) for table in TABLES}
+
+    def import_tables(self, data: dict[str, list[dict[str, Any]]], *,
+                      replace: bool = True) -> dict[str, int]:
+        """Влить дамп в текущую базу. replace=True — сначала очистить таблицы."""
+        counts: dict[str, int] = {}
+        with self.conn.transaction():
+            if replace:
+                if self.conn.dialect == "postgres":
+                    self.conn.execute("TRUNCATE messages, invites, games RESTART IDENTITY")
+                else:
+                    for table in ("messages", "invites", "games"):
+                        self.conn.execute(f"DELETE FROM {table}")
+                    self.conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('games')")
+            for table in TABLES:
+                rows = data.get(table) or []
+                if not rows:
+                    counts[table] = 0
+                    continue
+                columns = list(rows[0].keys())
+                placeholders = ", ".join("?" for _ in columns)
+                sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"
+                if self.conn.dialect == "sqlite" and table == "games":
+                    try:
+                        self.conn.execute("INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES ('games', 0)")
+                    except sqlite3.OperationalError:
+                        pass
+                for row in rows:
+                    values = [row.get(column) for column in columns]
+                    self.conn.execute(sql, values)
+                counts[table] = len(rows)
+            # в SQLite AUTOINCREMENT требует пересчитать счётчик после ручных id
+            if self.conn.dialect == "sqlite":
+                max_id = self.conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM games", fetch="one")
+                self.conn.execute("DELETE FROM sqlite_sequence WHERE name = 'games'")
+                self.conn.execute("INSERT INTO sqlite_sequence(name, seq) VALUES ('games', ?)",
+                                  (_row_value(max_id, "m"),))
+        return counts
 
     # ------------------------------------------------------------------ служебное
 

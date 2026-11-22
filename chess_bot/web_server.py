@@ -249,8 +249,7 @@ def game_payload(game: Game, viewer: Viewer, *, join_url: str | None = None,
 
 
 def token_for_game(game: Game) -> str | None:
-    row = STORE.conn.execute("SELECT token FROM invites WHERE game_id = ?", (game.id,)).fetchone()
-    return row["token"] if row else None
+    return STORE.token_for_game(game.id)
 
 
 def game_by_key(key: str) -> Game | None:
@@ -423,7 +422,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
-    store = GameStore(os.path.abspath(args.db))
+    store = GameStore.from_env(default=os.path.abspath(args.db))
 
     async def _main():
         await run_server(args.host, args.port, store, os.environ.get("TELEGRAM_BOT_TOKEN", ""))

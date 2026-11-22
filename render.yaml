@@ -10,11 +10,26 @@ services:
     envVars:
       - key: WEBAPP_URL
         value: https://catmaikl777.github.io/kosatka-chess/
-      - key: CHESS_DB
-        value: /data/chess_bot.db
       - key: TELEGRAM_BOT_TOKEN
         sync: false
-    disk:
-      name: kosatka-data
-      mountPath: /data
-      sizeGB: 1
+      # подключите базу из блока databases ниже (или любую внешнюю Postgres)
+      - key: DATABASE_URL
+        fromDatabase:
+          name: kosatka-db
+          property: connectionString
+      # ежедневная копия в Google Drive: сервисный аккаунт с доступом к папке
+      - key: BACKUP_ENABLED
+        value: "1"
+      - key: BACKUP_KEEP
+        value: "30"
+      - key: GDRIVE_FOLDER_ID
+        sync: false
+      - key: GDRIVE_SERVICE_ACCOUNT_JSON
+        sync: false
+
+databases:
+  - name: kosatka-db
+    plan: free
+    region: frankfurt
+    databaseName: kosatka
+    user: kosatka

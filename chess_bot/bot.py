@@ -265,19 +265,11 @@ def board_png(game: Game, viewer_id: int | None, highlight: int | None = None) -
 
 
 def remember_message(game_id: int, user_id: int, chat_id: int, message_id: int) -> None:
-    store.conn.execute(
-        """INSERT INTO messages (game_id, user_id, chat_id, message_id) VALUES (?, ?, ?, ?)
-           ON CONFLICT(game_id, user_id) DO UPDATE SET chat_id = excluded.chat_id,
-                                                       message_id = excluded.message_id""",
-        (game_id, user_id, chat_id, message_id),
-    )
+    store.remember_message(game_id, user_id, chat_id, message_id)
 
 
 def known_messages(game_id: int) -> list[tuple[int, int, int]]:
-    rows = store.conn.execute(
-        "SELECT user_id, chat_id, message_id FROM messages WHERE game_id = ?", (game_id,)
-    ).fetchall()
-    return [(row["user_id"], row["chat_id"], row["message_id"]) for row in rows]
+    return store.known_messages(game_id)
 
 
 async def send_board(bot: Bot, game: Game, viewer_id: int, chat_id: int) -> None:
@@ -346,14 +338,14 @@ async def run_engine(bot: Bot, game_id: int) -> None:
         board = game.draw_board()
         human_color = chess.WHITE if game.white_id else chess.BLACK
         if board.turn == human_color:
-            store.conn.execute("UPDATE games SET awaiting_engine = 0 WHERE id = ?", (game_id,))
+            store.clear_engine_pending(game_id)
             return
         store.mark_engine_pending(game_id)
         try:
             move = await asyncio.to_thread(choose_move, board.copy(), game.level or 2)
         except Exception:  # noqa: BLE001
             log.exception("Движок не смог выбрать ход в партии %s", game_id)
-            store.conn.execute("UPDATE games SET awaiting_engine = 0 WHERE id = ?", (game_id,))
+            store.clear_engine_pending(game_id)
             return
         updated = store.after_engine_move(game_id, move.uci())
         if updated:
@@ -509,14 +501,14 @@ def make_dispatcher() -> Dispatcher:
         message_id = call.message.message_id
 
         if action == "invite":
-            row = store.conn.execute("SELECT token FROM invites WHERE game_id = ?", (game_id,)).fetchone()
+            token = store.token_for_game(game_id)
             await call.answer()
-            if row is None:
+            if token is None:
                 await call.message.answer("Приглашение не найдено.")
                 return
             username = (await bot.get_me()).username
             await call.message.answer(
-                "Ссылка-приглашение:\n" f"<code>https://t.me/{username}?start={row['token']}</code>"
+                "Ссылка-приглашение:\n" f"<code>https://t.me/{username}?start={token}</code>"
             )
             return
 
@@ -697,7 +689,9 @@ async def main() -> None:
     global store
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     db_path = os.environ.get("CHESS_DB", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "chess_bot.db"))
-    store = GameStore(os.path.abspath(db_path))
+    # DATABASE_URL (Postgres на Render) важнее локального пути
+    store = GameStore.from_env(default=os.path.abspath(db_path))
+    log.info("Хранилище партий: %s", store.dialect)
     token = read_token()
     bot = Bot(token, default=DefaultBotProperties(parse_mode="HTML"))
     dp = make_dispatcher()
@@ -718,10 +712,21 @@ async def main() -> None:
         log.info("Доигрываю незавершённый ход бота в партии %s", game.id)
         schedule_engine(bot, game.id)
 
+    # ежедневная копия базы в 00:00 (по времени машины) + в Drive, если настроен
+    backup_task = None
+    if os.environ.get("BACKUP_ENABLED", "1") not in ("0", "false", "no"):
+        from .backup import start_daily
+
+        keep = int(os.environ.get("BACKUP_KEEP", "30"))
+        backup_task = start_daily(store, keep=keep)
+        log.info("Ежедневный бэкап включён (хранить %s копий)", keep)
+
     log.info("Бот запущен")
     try:
         await dp.start_polling(bot)
     finally:
+        if backup_task is not None:
+            backup_task.cancel()
         if runner is not None:
             await runner.cleanup()
 
