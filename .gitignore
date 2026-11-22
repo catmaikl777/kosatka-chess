@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+.pwcheck/
+*.db
+*.db-shm
+*.db-wal
+.env
+.office-verify/

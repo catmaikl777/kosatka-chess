@@ -1,0 +1,723 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Косатка · шахматы</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{
+  --bg:#18151f;
+  --bg-2:#231d2e;
+  --panel:#2a2335;
+  --panel-2:#332b40;
+  --text:#f3eee6;
+  --dim:#a99fb7;
+  --accent:#e89b4a;
+  --accent-2:#7ed6b0;
+  --light:#e9dbc4;
+  --dark:#7a584e;
+  --ok:#7ed6b0;
+  --bad:#ff8b8b;
+  --radius:18px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{min-height:100vh;min-height:100dvh}
+.app{max-width:560px;margin:0 auto;padding:12px 12px calc(12px + env(safe-area-inset-bottom))}
+
+header.top{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.cat{width:44px;height:44px;flex:none}
+.title{font-size:19px;font-weight:800;letter-spacing:.2px;line-height:1.1}
+.subtitle{font-size:12.5px;color:var(--dim);margin-top:2px}
+.moods{margin-left:auto;font-size:12px;color:var(--accent);text-align:right;max-width:44%;line-height:1.25}
+
+.boardWrap{position:relative;border-radius:var(--radius);padding:8px;background:var(--panel);
+  box-shadow:0 10px 30px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.04)}
+svg.board{display:block;width:100%;height:auto;border-radius:12px;touch-action:manipulation}
+svg.board .sq{cursor:default}
+svg.board.playable .sq.hasPiece{cursor:pointer}
+svg.board .sq.last{fill:rgba(232,155,74,.34)}
+svg.board .sq.sel{fill:rgba(232,155,74,.45)}
+svg.board .sq.checked{fill:rgba(255,90,90,.45)}
+svg.board .sq.hint{fill:rgba(126,214,176,.45)}
+svg.board .sq.dest{cursor:pointer}
+svg.board .dot{fill:rgba(30,30,40,.42);pointer-events:none}
+svg.board .ring{fill:none;stroke:rgba(232,155,74,.85);stroke-width:6;pointer-events:none}
+svg.board .arrow{stroke:rgba(232,155,74,.85);stroke-width:5;stroke-linecap:round;fill:none;pointer-events:none}
+svg.board .piece{pointer-events:none}
+
+.overlay{position:absolute;inset:8px;border-radius:12px;display:none;place-items:center;text-align:center;
+  background:rgba(20,16,28,.78);backdrop-filter:blur(3px);padding:16px;z-index:3}
+.overlay.show{display:grid}
+.overlay h2{margin:0 0 6px;font-size:20px}
+.overlay p{margin:0 0 14px;color:var(--dim);font-size:14px}
+
+.bar{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+button{font:inherit;border:0;border-radius:14px;padding:11px 14px;cursor:pointer;
+  background:var(--panel-2);color:var(--text);transition:transform .06s ease, background .15s}
+button:active{transform:scale(.97)}
+button.primary{background:linear-gradient(135deg,var(--accent),#d9822f);color:#1a1210;font-weight:700}
+button.ghost{background:transparent;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12)}
+button.danger{background:#3a2530;color:#ffc2c2}
+button:disabled{opacity:.45;cursor:default}
+.bar .grow{flex:1}
+
+.counter{font-size:13px;color:var(--dim);margin-top:8px;min-height:18px;text-align:center}
+
+dialog{border:0;border-radius:20px;background:var(--panel);color:var(--text);padding:0;max-width:520px;width:calc(100% - 24px);
+  box-shadow:0 24px 60px rgba(0,0,0,.5)}
+dialog::backdrop{background:rgba(8,6,12,.66)}
+.sheet{padding:18px}
+.sheet h3{margin:0 0 4px;font-size:18px}
+.sheet p{margin:0 0 14px;color:var(--dim);font-size:13.5px}
+.levels{display:grid;gap:8px;margin:10px 0 14px}
+.level{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:14px;background:var(--panel-2);
+  cursor:pointer;transition:box-shadow .15s, transform .08s}
+.level:active{transform:scale(.985)}
+.level[aria-pressed="true"]{box-shadow:inset 0 0 0 2px var(--accent)}
+.level .name{font-weight:700}
+.level .desc{font-size:12px;color:var(--dim)}
+.pick{display:flex;gap:8px}
+.pick button{flex:1}
+fieldset{border:0;padding:0;margin:0}
+.msg{font-size:13px;color:var(--bad);min-height:18px;margin-top:6px}
+
+.history{margin-top:12px;padding:12px 14px;border-radius:16px;background:var(--panel);font-size:13.5px;
+  color:var(--dim);line-height:1.55;word-break:break-word}
+.history b{color:var(--text)}
+.material{color:var(--accent)}
+
+.toast{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(14px);
+  background:#33283f;color:var(--text);padding:11px 16px;border-radius:14px;font-size:14px;
+  box-shadow:0 12px 30px rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:.18s ease;z-index:50;max-width:90vw;text-align:center}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+.status{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--dim);margin-bottom:10px}
+.dotpulse{width:8px;height:8px;border-radius:50%;background:var(--accent-2);box-shadow:0 0 0 0 rgba(126,214,176,.6);
+  animation:pulse 1.6s infinite}
+@keyframes pulse{70%{box-shadow:0 0 0 8px rgba(126,214,176,0)}100%{box-shadow:0 0 0 0 rgba(126,214,176,0)}}
+
+.toast *,button{user-select:none}
+.app.hidden{display:none}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="top">
+    <svg class="cat" viewBox="0 0 100 100" aria-label="Косатка">
+      <polygon points="16,40 22,14 44,30" fill="#0e0e14"/>
+      <polygon points="84,40 78,14 56,30" fill="#0e0e14"/>
+      <polygon points="20,36 24,19 36,29" fill="#7a4e56"/>
+      <ellipse cx="50" cy="58" rx="40" ry="34" fill="#0e0e14"/>
+      <ellipse cx="42" cy="72" rx="11" ry="11" fill="#f5f4f0"/>
+      <ellipse cx="58" cy="72" rx="11" ry="11" fill="#f5f4f0"/>
+      <ellipse cx="38" cy="52" rx="7" ry="8" fill="#7ed6b0"/>
+      <ellipse cx="62" cy="52" rx="7" ry="8" fill="#7ed6b0"/>
+      <ellipse cx="38" cy="53" rx="2" ry="6" fill="#0e0e14"/>
+      <ellipse cx="62" cy="53" rx="2" ry="6" fill="#0e0e14"/>
+      <rect x="33" y="55" width="10" height="2.6" rx="1.3" fill="#0e0e14"/>
+      <rect x="57" y="55" width="10" height="2.6" rx="1.3" fill="#0e0e14"/>
+      <polygon points="46,64 54,64 50,69" fill="#e89b4a"/>
+      <path d="M42 72 q8 6 16 0" stroke="#f5f4f0" stroke-width="2" fill="none"/>
+    </svg>
+    <div>
+      <div class="title" id="title">Косатка</div>
+      <div class="subtitle" id="subtitle">выбирает партию…</div>
+    </div>
+    <div class="moods" id="mood"></div>
+  </header>
+
+  <div class="boardWrap" id="boardWrap">
+    <svg class="board" id="board" viewBox="0 0 440 440" role="grid" aria-label="Шахматная доска"></svg>
+    <div class="overlay" id="overlay">
+      <div>
+        <h2 id="overlayTitle"></h2>
+        <p id="overlayText"></p>
+        <div class="bar" style="justify-content:center">
+          <button class="primary" id="overlayAgain">Ещё партия</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bar">
+    <button class="grow primary" id="btnNew">Новая партия</button>
+    <button id="btnFlip" title="Повернуть доску">⟳</button>
+    <button id="btnDraw" class="ghost">Ничья</button>
+    <button id="btnResign" class="danger">Сдаться</button>
+  </div>
+  <div class="counter" id="counter"></div>
+
+  <div class="history" id="history">Косатка уже точит когти.</div>
+</div>
+
+<dialog id="dlgStart">
+  <form method="dialog" class="sheet" id="startForm">
+    <h3>Устроим партию?</h3>
+    <p>Косатка садится напротив. Выберите, с кем играть.</p>
+    <div class="levels" id="opponents">
+      <button class="level" type="button" data-mode="pve" aria-pressed="true">
+        <span>
+          <span class="name">С Косаткой</span><br>
+          <span class="desc">ИИ на четырёх уровнях силы</span>
+        </span>
+      </button>
+      <button class="level" type="button" data-mode="pvp" aria-pressed="false">
+        <span>
+          <span class="name">С другом</span><br>
+          <span class="desc">Одна ссылка на двоих</span>
+        </span>
+      </button>
+    </div>
+
+    <div id="pveBlock">
+      <p style="margin-bottom:8px">Уровень Косатки</p>
+      <div class="levels" id="levels">
+        <button class="level" type="button" data-level="1" aria-pressed="false"><span class="name">1 · Новичок</span></button>
+        <button class="level" type="button" data-level="2" aria-pressed="true"><span class="name">2 · Любитель</span></button>
+        <button class="level" type="button" data-level="3" aria-pressed="false"><span class="name">3 · Клубный игрок</span></button>
+        <button class="level" type="button" data-level="4" aria-pressed="false"><span class="name">4 · Мастер</span></button>
+      </div>
+    </div>
+
+    <p style="margin-bottom:8px">Каким цветом?</p>
+    <div class="pick">
+      <button type="button" data-color="w" aria-pressed="true">♙ Белыми</button>
+      <button type="button" data-color="b" aria-pressed="false">♟ Чёрными</button>
+      <button type="button" data-color="r" aria-pressed="false">🎲 Случайно</button>
+    </div>
+    <div class="msg" id="startMsg"></div>
+    <div class="bar" style="margin-top:12px">
+      <button class="primary grow" type="submit" id="startGo">За доску</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgPromo">
+  <div class="sheet">
+    <h3>Превращение пешки</h3>
+    <p>Косатка спрашивает: в кого превращать?</p>
+    <div class="levels" id="promoPick"></div>
+  </div>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+
+const TG = window.Telegram ? window.Telegram.WebApp : null;
+if (TG) { try { TG.ready(); TG.expand(); TG.setHeaderColor('#18151f'); TG.setBackgroundColor('#18151f'); } catch (e) {} }
+
+const API = (window.KOSATKA_API || '').replace(/\/+$/, '');
+const POLL_MS = 1200;
+
+const state = {
+  gameId: null,
+  game: null,
+  perspective: 'w',
+  selected: null,
+  hint: false,
+  pending: false,
+  forceFlip: null,
+  timer: null,
+  name: (TG && TG.initDataUnsafe && TG.initDataUnsafe.user && TG.initDataUnsafe.user.first_name) || 'Игрок',
+  startParam: (TG && (TG.initDataUnsafe.start_param || TG.initDataUnsafe.startapp)) || new URLSearchParams(location.search).get('startapp') || '',
+  isTelegram: Boolean(TG && TG.initData),
+};
+
+const $ = (id) => document.getElementById(id);
+const board = $('board');
+
+/* Векторные фигуры (координаты 0..100) — не зависят от шрифтов устройства. */
+const GLYPH_PATHS = {
+  P: [
+    '<circle cx="50" cy="30" r="16"/>',
+    '<path d="M33 50 L67 50 L72 70 L28 70 Z"/>',
+    '<rect x="22" y="70" width="56" height="12" rx="4"/>',
+    '<rect x="16" y="82" width="68" height="10" rx="4"/>',
+  ],
+  R: [
+    '<path d="M22 16 h10 v10 h10 v-10 h16 v10 h10 v-10 h10 v22 L80 46 L74 74 L26 74 L20 46 Z"/>',
+    '<rect x="20" y="74" width="60" height="18" rx="4"/>',
+  ],
+  B: [
+    '<circle cx="50" cy="16" r="8"/>',
+    '<ellipse cx="50" cy="43" rx="19" ry="20"/>',
+    '<path d="M40 60 L60 60 L74 78 L26 78 Z"/>',
+    '<rect x="22" y="78" width="56" height="14" rx="4"/>',
+  ],
+  N: [
+    '<path d="M28 88 L20 58 C18 50 24 44 30 42 L36 24 L48 10 L60 14 L68 30 L70 54 L64 88 Z"/>',
+    '<rect x="24" y="86" width="50" height="10" rx="4"/>',
+  ],
+  Q: [
+    '<path d="M14 44 L24 18 L36 34 L50 12 L64 34 L76 18 L86 44 L80 62 L20 62 Z"/>',
+    '<circle cx="50" cy="10" r="6"/><circle cx="22" cy="16" r="5"/><circle cx="78" cy="16" r="5"/>',
+    '<rect x="18" y="62" width="64" height="12" rx="4"/>',
+    '<rect x="22" y="74" width="56" height="14" rx="4"/>',
+  ],
+  K: [
+    '<rect x="46" y="2" width="8" height="22"/>',
+    '<rect x="38" y="8" width="24" height="8"/>',
+    '<path d="M30 38 L70 38 L78 68 L22 68 Z"/>',
+    '<rect x="14" y="46" width="72" height="10" rx="3"/>',
+    '<rect x="18" y="66" width="64" height="12" rx="4"/>',
+    '<rect x="22" y="78" width="56" height="12" rx="4"/>',
+  ],
+};
+
+function pieceMarkup(p, cx, cy, size, flip) {
+  const letter = p[1].toUpperCase();
+  const paths = GLYPH_PATHS[letter] || GLYPH_PATHS.P;
+  const white = p[0] === 'w';
+  const fill = white ? '#fbfaf6' : '#17171e';
+  const stroke = white ? '#4a3f3a' : '#0a0a10';
+  const scale = size / 100;
+  const angle = flip && p[0] === 'b' ? 180 : 0;
+  const body = paths.join('');
+  return `<g class="piece" transform="translate(${cx - size / 2} ${cy - size / 2}) scale(${scale}) rotate(${angle} 50 50)" `
+    + `fill="${fill}" stroke="${stroke}" stroke-width="${white ? 1.6 : 1.1}" stroke-linejoin="round">${body}</g>`;
+}
+
+/* ---------- сеть ---------- */
+
+async function api(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (TG && TG.initData) headers['X-Telegram-Init-Data'] = TG.initData;
+  const res = await fetch(API + path, { ...options, headers });
+  let data = null;
+  try { data = await res.json(); } catch (e) { data = null; }
+  if (!res.ok) {
+    const message = (data && (data.error || data.message)) || ('Ошибка ' + res.status);
+    const err = new Error(message);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+/* ---------- отрисовка доски ---------- */
+
+const FILES = 'abcdefgh';
+
+function squareXY(square, size) {
+  const file = square.charCodeAt(0) - 97;
+  const rank = parseInt(square[1], 10) - 1;
+  const col = state.perspective === 'w' ? file : 7 - file;
+  const row = state.perspective === 'w' ? 7 - rank : rank;
+  return [col * size, row * size];
+}
+
+function pieceAt(square) {
+  const b = state.game && state.game.board;
+  return b ? b[square] || null : null;
+}
+
+function legalMovesFrom(square) {
+  const g = state.game;
+  if (!g || !g.legal) return [];
+  return g.legal.filter((m) => m.slice(0, 2) === square);
+}
+
+function renderBoard() {
+  const g = state.game;
+  if (!g) return;
+  const S = 440;
+  const step = S / 8;
+  const myTurn = g.yourTurn && !state.pending;
+  const checkedKing = findCheckedKing(g);
+  const last = g.lastMove || '';
+  const lastSquares = last ? [last.slice(0, 2), last.slice(2, 4)] : [];
+  const targets = state.selected ? legalMovesFrom(state.selected) : [];
+
+  const parts = [];
+  parts.push('<defs>');
+  parts.push('<marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="rgba(232,155,74,.9)"/></marker>');
+  parts.push(`<filter id="sh"><feDropShadow dx="0" dy="2" stdDeviation="1.6" flood-color="#000" flood-opacity=".35"/></filter>`);
+  parts.push('</defs>');
+
+  for (let row = 0; row < 8; row++) {
+    for (let col = 0; col < 8; col++) {
+      const file = state.perspective === 'w' ? col : 7 - col;
+      const rank = state.perspective === 'w' ? 7 - row : row;
+      const sq = FILES[file] + (rank + 1);
+      const isLight = (file + rank) % 2 === 1;
+      const classes = ['sq'];
+      if (isLight) classes.push('light'); else classes.push('dark');
+      if (lastSquares.includes(sq)) classes.push('last');
+      if (state.selected === sq) classes.push('sel');
+      if (checkedKing === sq) classes.push('checked');
+      if (state.hint && legalMovesFrom(sq).length && myTurn) classes.push('hint');
+      if (pieceAt(sq)) classes.push('hasPiece');
+      if (targets.some((m) => m.slice(2, 4) === sq)) classes.push('dest');
+      parts.push(`<rect class="${classes.join(' ')}" data-sq="${sq}" x="${col * step}" y="${row * step}" width="${step}" height="${step}" fill="${isLight ? 'var(--light)' : 'var(--dark)'}"/>`);
+    }
+  }
+
+  for (const m of targets) {
+    const [x, y] = squareXY(m.slice(2, 4), step);
+    if (pieceAt(m.slice(2, 4))) {
+      parts.push(`<rect class="ring" x="${x + 4}" y="${y + 4}" width="${step - 8}" height="${step - 8}" rx="10"/>`);
+    } else {
+      parts.push(`<circle class="dot" cx="${x + step / 2}" cy="${y + step / 2}" r="${step * 0.13}"/>`);
+    }
+  }
+
+  // фигуры рисуем векторно: шрифт с шахматными глифами есть не на всех устройствах
+  const flip = state.perspective === 'b';
+  for (let row = 0; row < 8; row++) {
+    for (let col = 0; col < 8; col++) {
+      const file = state.perspective === 'w' ? col : 7 - col;
+      const rank = state.perspective === 'w' ? 7 - row : row;
+      const sq = FILES[file] + (rank + 1);
+      const p = pieceAt(sq);
+      if (!p) continue;
+      const cx = col * step + step / 2;
+      const cy = row * step + step / 2;
+      parts.push(pieceMarkup(p, cx, cy, step * 0.8, flip));
+    }
+  }
+
+  board.innerHTML = parts.join('');
+  board.classList.toggle('playable', Boolean(myTurn));
+  $('board').querySelectorAll('.sq').forEach((el) => {
+    el.addEventListener('click', () => onSquare(el.dataset.sq));
+  });
+}
+
+function findCheckedKing(g) {
+  if (!g.isCheck || !g.checkSquare) return null;
+  const sq = g.checkSquare;
+  const persp = state.perspective === 'w' ? 0 : 7;
+  const col = persp + (persp === 0 ? sq.charCodeAt(0) - 97 : 7 - (sq.charCodeAt(0) - 97));
+  return sq;
+}
+
+/* ---------- логика кликов ---------- */
+
+function onSquare(square) {
+  const g = state.game;
+  if (!g || g.status !== 'active') return;
+  if (state.pending) return;
+  if (!g.yourTurn) { toast('Сейчас не ваш ход'); return; }
+
+  const piece = pieceAt(square);
+  const isMine = piece && piece[0] === g.you;
+
+  if (state.selected) {
+    const moves = legalMovesFrom(state.selected).filter((m) => m.slice(2, 4) === square);
+    if (moves.length) {
+      const promo = moves.find((m) => m.length === 5);
+      if (promo) { askPromotion(state.selected, square); return; }
+      sendMove(moves[0]);
+      return;
+    }
+    if (isMine) { state.selected = square; renderBoard(); return; }
+    state.selected = null;
+    renderBoard();
+    return;
+  }
+  if (isMine) {
+    state.selected = square;
+    renderBoard();
+  }
+}
+
+function askPromotion(from, to) {
+  const box = $('promoPick');
+  const options = [
+    ['q', '♕ Ферзь'], ['r', '♖ Ладья'], ['b', '♗ Слон'], ['n', '♘ Конь'],
+  ];
+  box.innerHTML = options.map(([k, label]) =>
+    `<button class="level" type="button" data-promo="${k}"><span class="name">${label}</span></button>`).join('');
+  box.querySelectorAll('button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      $('dlgPromo').close();
+      sendMove(from + to + btn.dataset.promo);
+    });
+  });
+  $('dlgPromo').showModal();
+}
+
+async function sendMove(uci) {
+  state.pending = true;
+  state.selected = null;
+  renderStatus();
+  try {
+    const g = await api(`/api/game/${state.gameId}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ uci }),
+    });
+    applyGame(g);
+    if (TG && TG.HapticFeedback) TG.HapticFeedback.impactOccurred('light');
+  } catch (err) {
+    toast(err.message);
+    refresh();
+  } finally {
+    state.pending = false;
+    renderStatus();
+  }
+}
+
+/* ---------- состояние ---------- */
+
+function applyGame(g) {
+  const prevMoves = state.game ? (state.game.moves || []).length : 0;
+  state.game = g;
+  if (!state.forceFlip) {
+    if (g.you) state.perspective = g.you;
+    else state.perspective = state.perspective || 'w';
+  }
+  if ((g.moves || []).length !== prevMoves) state.selected = null;
+  renderBoard();
+  renderStatus();
+  renderHistory();
+  renderOverlay();
+  schedulePoll();
+}
+
+function schedulePoll() {
+  if (state.timer) clearTimeout(state.timer);
+  const g = state.game;
+  if (!g) return;
+  const needPoll = g.status === 'waiting' || (g.status === 'active' && (!g.yourTurn || g.mode === 'pvp'));
+  if (!needPoll) return;
+  state.timer = setTimeout(refresh, POLL_MS);
+}
+
+async function refresh() {
+  if (!state.gameId) return;
+  try {
+    const g = await api(`/api/game/${state.gameId}`);
+    applyGame(g);
+  } catch (err) {
+    if (err.status === 404) showStart();
+  }
+}
+
+function renderStatus() {
+  const g = state.game;
+  if (!g) return;
+  const sub = $('subtitle');
+  const mood = $('mood');
+  const counter = $('counter');
+  let text = '';
+  if (g.mode === 'pve') text = 'Косатка · ' + g.levelName;
+  else text = 'Партия с другом';
+  sub.textContent = text;
+
+  mood.textContent = g.mood || '';
+  let c = '';
+  if (g.status === 'waiting') c = 'Отправьте другу ссылку — и он сядет за доску';
+  else if (g.status === 'finished') c = g.result || 'Партия окончена';
+  else if (state.pending) c = 'Косатка думает…';
+  else if (!g.you) c = 'Вы смотрите партию';
+  else if (g.yourTurn) c = 'Ваш ход' + (g.isCheck ? ' · шах!' : '');
+  else c = 'Ходит соперник' + (g.isCheck ? ' · шах!' : '');
+  counter.textContent = c;
+
+  const canAct = Boolean(g.you) && g.status === 'active';
+  $('btnResign').disabled = !canAct;
+  $('btnDraw').disabled = !canAct || g.mode === 'pve';
+  $('btnFlip').disabled = false;
+}
+
+function renderHistory() {
+  const g = state.game;
+  const box = $('history');
+  if (!g) { box.textContent = ''; return; }
+  const moves = g.movesSan || [];
+  if (!moves.length) { box.textContent = 'Ходов пока нет — первая лапа за вами.'; return; }
+  const pairs = [];
+  for (let i = 0; i < moves.length; i += 2) {
+    pairs.push(`${i / 2 + 1}. ${moves[i]}${moves[i + 1] ? ' ' + moves[i + 1] : ''}`);
+  }
+  const tail = pairs.slice(-12).join('   ');
+  const mat = g.material ? ` · <span class="material">${g.material}</span>` : '';
+  box.innerHTML = `<b>Ходы:</b> ${tail}${mat}`;
+}
+
+function renderOverlay() {
+  const g = state.game;
+  const ov = $('overlay');
+  if (!g) { ov.classList.remove('show'); return; }
+  if (g.status === 'finished') {
+    $('overlayTitle').textContent = g.resultKind === 'draw' ? 'Ничья' : 'Партия окончена';
+    $('overlayText').textContent = g.result || '';
+    ov.classList.add('show');
+    if (TG && TG.HapticFeedback) TG.HapticFeedback.notificationOccurred('success');
+  } else if (g.status === 'waiting') {
+    $('overlayTitle').textContent = 'Ждём друга';
+    $('overlayText').textContent = 'Косатка уже села за доску и ждёт второго игрока.';
+    ov.classList.add('show');
+  } else {
+    ov.classList.remove('show');
+  }
+}
+
+/* ---------- меню старта ---------- */
+
+const start = { mode: 'pve', level: 2, color: 'w' };
+
+function bindPicker(container, attr, key, parse = (v) => v) {
+  container.querySelectorAll('button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      container.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', 'false'));
+      btn.setAttribute('aria-pressed', 'true');
+      start[key] = parse(btn.dataset[attr]);
+      $('pveBlock').style.display = start.mode === 'pve' ? '' : 'none';
+    });
+  });
+}
+
+function bindStart() {
+  $('opponents').querySelectorAll('button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      $('opponents').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', 'false'));
+      btn.setAttribute('aria-pressed', 'true');
+      start.mode = btn.dataset.mode;
+      $('pveBlock').style.display = start.mode === 'pve' ? '' : 'none';
+    });
+  });
+  bindPicker($('levels'), 'level', 'level', Number);
+  bindPicker($('startForm').querySelector('.pick'), 'color', 'color');
+
+  $('startGo').addEventListener('click', async (event) => {
+    event.preventDefault();
+    $('startMsg').textContent = '';
+    try {
+      const g = await api('/api/game/new', {
+        method: 'POST',
+        body: JSON.stringify({ ...start, playerName: state.name }),
+      });
+      $('dlgStart').close();
+      enterGame(g);
+    } catch (err) {
+      $('startMsg').textContent = err.message;
+    }
+  });
+}
+
+function showStart() {
+  state.gameId = null;
+  state.game = null;
+  if (state.timer) clearTimeout(state.timer);
+  renderOverlay();
+  $('app').classList.add('hidden');
+  $('dlgStart').showModal();
+}
+
+function enterGame(g) {
+  $('app').classList.remove('hidden');
+  state.gameId = g.id;
+  state.perspective = g.you || 'w';
+  state.selected = null;
+  $('overlay').classList.remove('show');
+  applyGame(g);
+  if (g.joinUrl) showJoinLink(g.joinUrl);
+}
+
+function showJoinLink(url) {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(url).then(() => toast('Ссылка для друга скопирована'), () => toast(url));
+  } else {
+    toast(url);
+  }
+  const box = $('history');
+  box.innerHTML = `Ссылка для друга: <b>${url}</b><br><span style="font-size:12px">Отправьте её тому, с кем хотите играть.</span>`;
+}
+
+/* ---------- кнопки ---------- */
+
+function bindActions() {
+  $('btnNew').addEventListener('click', showStart);
+
+  $('btnFlip').addEventListener('click', () => {
+    state.forceFlip = state.perspective === 'w' ? 'b' : 'w';
+    state.perspective = state.forceFlip;
+    renderBoard();
+  });
+
+  $('overlayAgain').addEventListener('click', showStart);
+
+  $('btnResign').addEventListener('click', async () => {
+    if (!state.gameId) return;
+    if (!confirm('Сдаться? Косатка не осуждает.')) return;
+    try {
+      const g = await api(`/api/game/${state.gameId}/resign`, { method: 'POST', body: '{}' });
+      applyGame(g);
+    } catch (err) { toast(err.message); }
+  });
+
+  $('btnDraw').addEventListener('click', async () => {
+    if (!state.gameId) return;
+    try {
+      const g = await api(`/api/game/${state.gameId}/draw`, { method: 'POST', body: '{}' });
+      applyGame(g);
+      toast(g.notice || 'Предложение отправлено');
+    } catch (err) { toast(err.message); }
+  });
+
+  board.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
+/* ---------- утилиты ---------- */
+
+let toastTimer = null;
+function toast(text) {
+  const el = $('toast');
+  el.textContent = text;
+  el.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+/* ---------- старт ---------- */
+
+async function boot() {
+  bindStart();
+  bindActions();
+  renderBoard();
+
+  if (!state.isTelegram) {
+    const params = new URLSearchParams(location.search);
+    const asPlayer = params.get('as') || '';
+    if (asPlayer) state.name = asPlayer;
+  }
+
+  if (state.startParam) {
+    try {
+      const g = await api(`/api/join/${encodeURIComponent(state.startParam)}`, {
+        method: 'POST',
+        body: JSON.stringify({ playerName: state.name }),
+      });
+      enterGame(g);
+      return;
+    } catch (err) {
+      toast('Приглашение не найдено или устарело');
+    }
+  }
+
+  try {
+    const last = await api('/api/last');
+    if (last && last.id) {
+      enterGame(last);
+      return;
+    }
+  } catch (err) { /* нет партии — показываем меню */ }
+
+  showStart();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.gameId) refresh();
+});
+
+boot();
+</script>
+</body>
+</html>

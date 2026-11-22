@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: kosatka-api
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: WEBAPP_URL
+        value: https://catmaikl777.github.io/kosatka-chess/
+      - key: CHESS_DB
+        value: /data/chess_bot.db
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+    disk:
+      name: kosatka-data
+      mountPath: /data
+      sizeGB: 1
