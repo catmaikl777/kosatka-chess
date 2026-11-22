@@ -174,3 +174,36 @@ class TestBoardUi(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+class TestPostgresIds(unittest.TestCase):
+    """Telegram id не влезают в int4 — схема и миграция должны давать int8."""
+
+    def test_schema_players_uses_bigint(self):
+        from chess_bot.app.store import POSTGRES_SCHEMA
+        self.assertIn("user_id      BIGINT PRIMARY KEY", POSTGRES_SCHEMA)
+
+    def test_migration_widens_only_int4_columns(self):
+        from chess_bot.app.store import _widen_id_columns
+
+        class Cur:
+            def __init__(self, kinds):
+                self.kinds = kinds
+                self.alters = []
+                self._row = None
+
+            def execute(self, sql, params=None):
+                if sql.startswith("SELECT"):
+                    kind = self.kinds.get(tuple(params))
+                    self._row = {"data_type": kind} if kind else None
+                else:
+                    self.alters.append(sql)
+
+            def fetchone(self):
+                return self._row
+
+        cur = Cur({("players", "user_id"): "integer", ("games", "host_id"): "bigint"})
+        _widen_id_columns(cur)
+        self.assertEqual(
+            cur.alters,
+            ["ALTER TABLE players ALTER COLUMN user_id TYPE BIGINT"],
+        )

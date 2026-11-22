@@ -1,4 +1,4 @@
-﻿"""Хранилище партий и приглашений: SQLite локально, Postgres на сервере.
+"""Хранилище партий и приглашений: SQLite локально, Postgres на сервере.
 
 Источник истины — база: партия переживает перезапуск процесса, а не только
 питается из памяти. Все изменяющие операции идут через транзакцию, поэтому
@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import sqlite3
@@ -20,6 +21,8 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
 import chess
+
+log = logging.getLogger("chess_bot.store")
 
 # Типы колонок под каждый движок: в Postgres int8 нужен для Telegram ID
 # (у пользователей бывают id больше 2^31) и float8 для времени.
@@ -114,7 +117,7 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE TABLE IF NOT EXISTS players (
-    user_id      INTEGER PRIMARY KEY,
+    user_id      BIGINT PRIMARY KEY,
     name         TEXT,
     pve_games    INTEGER NOT NULL DEFAULT 0,
     pve_wins     INTEGER NOT NULL DEFAULT 0,
@@ -240,6 +243,48 @@ class _Transaction:
         return False
 
 
+_POSTGRES_ID_COLUMNS = (
+    ("games", "white_id"),
+    ("games", "black_id"),
+    ("games", "host_id"),
+    ("games", "chat_id"),
+    ("games", "message_id"),
+    ("games", "draw_offer_by"),
+    ("invites", "game_id"),
+    ("invites", "host_id"),
+    ("messages", "game_id"),
+    ("messages", "user_id"),
+    ("messages", "chat_id"),
+    ("messages", "message_id"),
+    ("players", "user_id"),
+)
+
+
+def _widen_id_columns(cur) -> None:
+    """Старые базы создавались с int4 — расширяем id-колонки до int8.
+
+    Современные Telegram id больше 2^31, и INSERT падал с
+    NumericValueOutOfRange. CREATE TABLE IF NOT EXISTS тип не меняет,
+    поэтому при каждом подключении сверяем и при необходимости ALTER.
+    """
+    for table, column in _POSTGRES_ID_COLUMNS:
+        cur.execute(
+            "SELECT data_type FROM information_schema.columns"
+            " WHERE table_schema = current_schema()"
+            " AND table_name = %s AND column_name = %s",
+            (table, column),
+        )
+        row = cur.fetchone()
+        if not row:
+            continue
+        kind = row["data_type"] if isinstance(row, dict) else row[0]
+        if kind in ("integer", "smallint"):
+            try:
+                cur.execute(f"ALTER TABLE {table} ALTER COLUMN {column} TYPE BIGINT")
+            except Exception as error:  # noqa: BLE001 — не роняем старт сервиса
+                log.warning("Не удалось расширить %s.%s: %s", table, column, error)
+
+
 class _PostgresConn:
     """Обёртка psycopg3: ? → %s, транзакция на каждый вызов."""
 
@@ -253,6 +298,7 @@ class _PostgresConn:
         self.conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=True)
         with self.conn.cursor() as cur:
             cur.execute(POSTGRES_SCHEMA)
+            _widen_id_columns(cur)
 
     @staticmethod
     def _sql(sql: str) -> str:
