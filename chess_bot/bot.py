@@ -538,7 +538,11 @@ def make_dispatcher() -> Dispatcher:
         _, level_s, color_s = call.data.split(":")
         level = int(level_s)
         color = random.choice([chess.WHITE, chess.BLACK]) if color_s == "r" else color_s == "w"
-        await call.answer()
+        await call.answer("Играем " + ("белыми ♙" if color else "чёрными ♟"))
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
         store.touch_player(call.from_user.id, call.from_user.full_name)
         game = store.create_pve(call.from_user.id, call.from_user.full_name, color, level)
         await send_board(bot, game, call.from_user.id, call.message.chat.id)
