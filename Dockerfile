@@ -13,7 +13,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY chess_bot ./chess_bot
 COPY tools ./tools
-COPY render ./render
 
 # локальный каталог копий; на Render база живёт в Postgres, а копии уходят в Drive
 RUN mkdir -p /data /app/backups
