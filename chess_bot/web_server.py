@@ -90,6 +90,13 @@ def make_viewer(request: web.Request) -> Viewer:
         log.warning("Отклонена подпись initData")
         raise web.HTTPUnauthorized(text=json.dumps({"error": "bad init data"}), content_type="application/json")
 
+    # браузер без Telegram: стабильный id из localStorage (cookie на GitHub Pages
+    # блокируется как сторонняя, поэтому клиент присылает его заголовком)
+    sid = request.headers.get("X-Kosatka-Sid", "").strip()
+    if sid:
+        digest = hashlib.sha256(sid.encode()).hexdigest()[:12]
+        return Viewer(int(digest, 16) % 10 ** 12, request.query.get("as") or "Гость", False)
+
     # режим без Telegram (локальная игра / отладка) — отдельный «игрок браузера»
     cookie = request.cookies.get("kosatka_sid")
     if cookie and cookie.startswith("web:"):
@@ -105,7 +112,7 @@ def make_viewer(request: web.Request) -> Viewer:
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-Telegram-Init-Data",
+    "Access-Control-Allow-Headers": "Content-Type, X-Telegram-Init-Data, X-Kosatka-Sid",
     "Access-Control-Max-Age": "86400",
 }
 

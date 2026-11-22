@@ -279,9 +279,19 @@ const Sound = {
 Sound.preload();
 /* ---------- сеть ---------- */
 
+const SID = (() => {
+  let v = localStorage.getItem('kosatka_sid');
+  if (!v) {
+    v = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(16).slice(2);
+    localStorage.setItem('kosatka_sid', v);
+  }
+  return v;
+})();
+
 async function api(path, options = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (TG && TG.initData) headers['X-Telegram-Init-Data'] = TG.initData;
+  else headers['X-Kosatka-Sid'] = SID;
   const res = await fetch(API + path, { ...options, headers });
   let data = null;
   try { data = await res.json(); } catch (e) { data = null; }
