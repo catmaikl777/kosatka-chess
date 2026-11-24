@@ -24,6 +24,7 @@ from typing import Any
 from urllib.parse import parse_qsl
 
 import chess
+import aiohttp
 from aiohttp import web
 
 from .app.engine import LEVEL_NAMES, choose_move, evaluate
@@ -439,9 +440,41 @@ async def index(request: web.Request) -> web.FileResponse:
     return web.FileResponse(WEBAPP_DIR / "index.html")
 
 
+async def _telegram_state(token: str) -> dict[str, Any]:
+    """Вебхук, очередь и последняя ошибка по данным Telegram. Кэш 30 с."""
+    if not token:
+        return {"at": time.time()}
+    url = f"https://api.telegram.org/bot{token}/getWebhookInfo"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                body = await response.json()
+        result = body.get("result") or {}
+        return {
+            "at": time.time(),
+            "webhook": result.get("url") or "",
+            "pending": int(result.get("pending_update_count") or 0),
+            "last_error": result.get("last_error_message") or "",
+        }
+    except Exception as error:  # noqa: BLE001 — health не должен падать
+        return {"at": time.time(), "last_error": f"нет связи: {error}"[:120]}
+
+
 async def health(request: web.Request) -> web.Response:
     bot_ok = bool(request.app.get("bot_healthy", False))
-    return web.json_response({"ok": True, "telegram": bool(request.app.get("bot_token")), "bot": bot_ok})
+    info = request.app.get("tg_info")
+    if not info or time.time() - info.get("at", 0) > 30:
+        info = await _telegram_state(request.app.get("bot_token", ""))
+        request.app["tg_info"] = info
+    return web.json_response({
+        "ok": True,
+        "telegram": bool(request.app.get("bot_token")),
+        "bot": bot_ok,
+        "commit": (os.environ.get("RENDER_GIT_COMMIT") or "")[:7],
+        "webhook": info.get("webhook", ""),
+        "pending": info.get("pending", 0),
+        "lastError": info.get("last_error", ""),
+    })
 
 
 async def api_new(request: web.Request) -> web.Response:

@@ -454,6 +454,18 @@ async def main() -> None:
     bot = Bot(token, default=DefaultBotProperties(parse_mode="HTML"))
     dp = make_dispatcher()
 
+    try:
+        hook = await bot.get_webhook_info()
+        if hook.url:
+            log.warning("Был установлен вебхук %s — удаляю, работаем на поллинге", hook.url)
+            await bot.delete_webhook()
+        me = await bot.get_me()
+        log.info("Telegram: @%s", me.username)
+        if runner is not None:
+            runner.app["bot_healthy"] = True
+    except Exception:  # noqa: BLE001 — сеть может моргнуть, поллинг попробуем всё равно
+        log.exception("Не удалось проверить вебхук и бот-аккаунт")
+
     runner = None
     webapp_url = os.environ.get("WEBAPP_URL", "").strip()
     if webapp_url:
@@ -462,7 +474,6 @@ async def main() -> None:
         host = os.environ.get("WEBAPP_HOST", "0.0.0.0")
         port = int(os.environ.get("WEBAPP_PORT", "8080"))
         runner = await run_server(host, port, store, token)
-        runner.app["bot_healthy"] = True
         log.info("Web App доступен по %s", webapp_url)
     else:
         log.warning("WEBAPP_URL не задан — играть негде: бот только создаёт партии")
@@ -484,15 +495,18 @@ async def main() -> None:
 
     notify_task = asyncio.create_task(notify_loop(bot))
     log.info("Бот запущен")
+    conflicts = 0
     try:
         while True:
             try:
                 await dp.start_polling(bot)
                 break
-            except TelegramConflictError:
-                # второй экземпляр бота: локальный запуск рядом с Render
-                log.error("Конфликт: другой экземпляр бота уже забирает обновления. "
-                          "Проверю снова через 20 с.")
+            except TelegramConflictError as error:
+                # второй экземпляр бота: перекрытие деплоя или вебхук из прошлого запуска
+                conflicts += 1
+                log.error("Конфликт getUpdates (%s/5): %s", conflicts, error)
+                if conflicts >= 5:
+                    raise
                 await asyncio.sleep(20)
     finally:
         notify_task.cancel()
