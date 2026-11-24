@@ -398,8 +398,10 @@ class _PostgresConn:
         self.conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=True)
         with self.conn.cursor() as cur:
             cur.execute(POSTGRES_SCHEMA)
-            _widen_id_columns(cur)
+            # сначала досоздаём новые колонки, потом расширяем типы:
+            # ADD COLUMN с INTEGER иначе останется int4 до следующего старта
             _ensure_extra_columns(cur.execute)
+            _widen_id_columns(cur)
 
     @staticmethod
     def _sql(sql: str) -> str:
