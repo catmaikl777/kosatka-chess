@@ -33,7 +33,7 @@ from aiogram.types import (
 )
 
 from .app.engine import LEVEL_NAMES
-from .app.store import TIME_CONTROL_NAMES, GameStore
+from .app.store import TIME_CONTROLS, TIME_CONTROL_NAMES, GameStore
 
 log = logging.getLogger("chess_bot")
 
@@ -101,6 +101,7 @@ def stats_text(user_id: int) -> str:
     name = s.get("name") or "Игрок"
     lines = [
         f"📊 <b>Статистика · {name}</b>",
+        f"Рейтинг PvP: <b>{store.player_rating(user_id)}</b>",
         "",
         f"Всего партий: <b>{s['total_games']}</b> · побед <b>{s['total_wins']}</b> "
         f"({_pct(s['total_wins'], s['total_games'])}) · ничьих {s['total_draws']}",
@@ -197,6 +198,17 @@ def play_markup(game_id: int, *extra_rows: list[InlineKeyboardButton]) -> Inline
     rows = [[InlineKeyboardButton(text="♟ Открыть партию", web_app=WebAppInfo(url=url))]]
     rows.extend(extra_rows)
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def timer_keyboard(prefix: str, back: str = "menu:root") -> InlineKeyboardMarkup:
+    """Выбор контроля времени: без таймера, 3+2, 5+0, 10+0."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏳ Без таймера", callback_data=f"{prefix}:")],
+        [InlineKeyboardButton(text="3 минуты + 2 с", callback_data=f"{prefix}:3+2"),
+         InlineKeyboardButton(text="5 минут", callback_data=f"{prefix}:5+0")],
+        [InlineKeyboardButton(text="10 минут", callback_data=f"{prefix}:10+0")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data=back)],
+    ])
 
 
 def make_dispatcher() -> Dispatcher:
@@ -377,11 +389,28 @@ def make_dispatcher() -> Dispatcher:
         )
 
     @dp.callback_query(F.data.startswith("pve:"))
-    async def start_pve(call: CallbackQuery) -> None:
+    async def pick_time_pve(call: CallbackQuery) -> None:
         _, level_s, color_s = call.data.split(":")
         level = int(level_s)
+        await call.answer()
+        await edit_menu(
+            call,
+            f"<b>{LEVEL_NAMES[level]}</b> · {'белые ♙' if color_s == 'w' else 'чёрные ♟'}\n"
+            "Сколько времени на партию?\n"
+            "<i>Без таймера — можно думать сколько угодно.</i>",
+            timer_keyboard(f"pvet:{level}:{color_s}", back="menu:bot"),
+        )
+
+    @dp.callback_query(F.data.startswith("pvet:"))
+    async def start_pve(call: CallbackQuery) -> None:
+        _, level_s, color_s, time_s = call.data.split(":", 3)
+        level = int(level_s)
         color = color_s != "b"
-        await call.answer("Играем " + ("белыми ♙" if color else "чёрными ♟"))
+        time_control = time_s if time_s in TIME_CONTROLS else ""
+        await call.answer(
+            "Играем " + ("белыми ♙" if color else "чёрными ♟")
+            + (f" · {TIME_CONTROL_NAMES[time_control]}" if time_control else "")
+        )
         try:
             await call.message.edit_reply_markup(reply_markup=None)
         except TelegramBadRequest:
@@ -389,7 +418,7 @@ def make_dispatcher() -> Dispatcher:
         store.save_chat_id(call.from_user.id, call.message.chat.id)
         name = player_name(call.from_user.id, call.from_user.full_name)
         store.touch_player(call.from_user.id, name)
-        game = store.create_pve(call.from_user.id, name, color, level)
+        game = store.create_pve(call.from_user.id, name, color, level, time_control)
         markup = play_markup(game.id, [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:root")])
         text = card_text(game, call.from_user.id) + "\n\nСоздана. Доска откроется по кнопке ниже."
         if markup:
@@ -410,13 +439,26 @@ def make_dispatcher() -> Dispatcher:
         await edit_menu(call, "<b>Партия с другом</b>\nКаким цветом играете?", InlineKeyboardMarkup(inline_keyboard=rows))
 
     @dp.callback_query(F.data.startswith("pvp:"))
+    async def pick_time_pvp(call: CallbackQuery) -> None:
+        color_s = call.data.split(":")[1]
+        await call.answer()
+        await edit_menu(
+            call,
+            f"<b>Партия с другом</b> · {'белые ♙' if color_s == 'w' else 'чёрные ♟'}\n"
+            "Сколько времени на партию?",
+            timer_keyboard(f"pvpt:{color_s}", back="menu:root"),
+        )
+
+    @dp.callback_query(F.data.startswith("pvpt:"))
     async def create_pvp(call: CallbackQuery, bot: Bot) -> None:
-        color = call.data.split(":")[1] == "w"
+        _, color_s, time_s = call.data.split(":", 2)
+        color = color_s == "w"
+        time_control = time_s if time_s in TIME_CONTROLS else ""
         await call.answer()
         store.save_chat_id(call.from_user.id, call.message.chat.id)
         name = player_name(call.from_user.id, call.from_user.full_name)
         store.touch_player(call.from_user.id, name)
-        game, token = store.create_pvp(call.from_user.id, name, color)
+        game, token = store.create_pvp(call.from_user.id, name, color, time_control)
         username = (await bot.get_me()).username
         link = f"https://t.me/{username}?start={token}"
         markup = play_markup(game.id, [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:root")])
