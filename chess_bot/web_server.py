@@ -474,6 +474,7 @@ async def health(request: web.Request) -> web.Response:
         "webhook": info.get("webhook", ""),
         "pending": info.get("pending", 0),
         "lastError": info.get("last_error", ""),
+        "startupError": request.app.get("startup_error", ""),
     })
 
 

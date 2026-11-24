@@ -454,18 +454,6 @@ async def main() -> None:
     bot = Bot(token, default=DefaultBotProperties(parse_mode="HTML"))
     dp = make_dispatcher()
 
-    try:
-        hook = await bot.get_webhook_info()
-        if hook.url:
-            log.warning("Был установлен вебхук %s — удаляю, работаем на поллинге", hook.url)
-            await bot.delete_webhook()
-        me = await bot.get_me()
-        log.info("Telegram: @%s", me.username)
-        if runner is not None:
-            runner.app["bot_healthy"] = True
-    except Exception:  # noqa: BLE001 — сеть может моргнуть, поллинг попробуем всё равно
-        log.exception("Не удалось проверить вебхук и бот-аккаунт")
-
     runner = None
     webapp_url = os.environ.get("WEBAPP_URL", "").strip()
     if webapp_url:
@@ -477,6 +465,20 @@ async def main() -> None:
         log.info("Web App доступен по %s", webapp_url)
     else:
         log.warning("WEBAPP_URL не задан — играть негде: бот только создаёт партии")
+
+    try:
+        hook = await bot.get_webhook_info()
+        if hook.url:
+            log.warning("Был установлен вебхук %s — удаляю, работаем на поллинге", hook.url)
+            await bot.delete_webhook()
+        me = await bot.get_me()
+        log.info("Telegram: @%s", me.username)
+        if runner is not None:
+            runner.app["bot_healthy"] = True
+    except Exception as error:  # noqa: BLE001 — сеть может моргнуть, поллинг попробуем всё равно
+        log.exception("Не удалось проверить вебхук и бот-аккаунт")
+        if runner is not None:
+            runner.app["startup_error"] = f"{type(error).__name__}: {error}"[:200]
 
     # Ход бота считается в вебе при открытии партии. Флаги, оставшиеся от
     # прерванного расчёта, снимаем, иначе партия повиснет в «бот думает».
