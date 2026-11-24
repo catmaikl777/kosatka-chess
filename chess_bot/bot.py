@@ -24,6 +24,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramBadRequest, TelegramConflictError
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
+    BotCommand,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -56,9 +57,17 @@ HELP_TEXT = (
     "4. Превращение пешки: выберите фигуру из подсказки.\n\n"
     "«Сдаться» и «Ничья» — кнопками под доской в вебе.\n"
     "Партии хранятся в базе, поэтому перезапуск Косатки не теряет позицию.\n\n"
-    "Имя в партиях меняется командой <code>/nick Имя</code>, "
-    "профиль и рейтинг — <code>/profile</code>."
+    "Профиль, статистика, история и ник — кнопками в меню. "
+    "Команда нужна одна: /start."
 )
+
+
+def is_admin(user_id: int) -> bool:
+    admin = int(os.environ.get("ADMIN_ID", "0") or 0)
+    return bool(admin) and user_id == admin
+
+
+PENDING_NICK: set[int] = set()
 
 
 def player_name(user_id: int, fallback: str) -> str:
@@ -151,9 +160,12 @@ def menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🐈‍⬛ Играть с Косаткой", callback_data="menu:bot")],
         [InlineKeyboardButton(text="👥 Позвать друга", callback_data="menu:friend")],
-        [InlineKeyboardButton(text="📊 Статистика", callback_data="stats:me"),
+        [InlineKeyboardButton(text="👤 Профиль", callback_data="me:profile"),
+         InlineKeyboardButton(text="📊 Статистика", callback_data="stats:me")],
+        [InlineKeyboardButton(text="📜 История", callback_data="history:show"),
          InlineKeyboardButton(text="🏆 Топ игроков", callback_data="top:show")],
-        [InlineKeyboardButton(text="🐾 Как играть", callback_data="menu:help")],
+        [InlineKeyboardButton(text="✏️ Сменить ник", callback_data="me:nick"),
+         InlineKeyboardButton(text="🐾 Как играть", callback_data="menu:help")],
     ])
 
 
@@ -219,48 +231,11 @@ def make_dispatcher() -> Dispatcher:
             if markup:
                 await message.answer(f"У вас есть незавершённая партия #{game.id}.", reply_markup=markup)
 
-    @dp.message(Command("help"))
-    async def help_cmd(message: Message) -> None:
-        await message.answer(HELP_TEXT, reply_markup=menu_keyboard())
-
-    @dp.message(Command("new"))
-    async def new_cmd(message: Message) -> None:
-        await message.answer(MENU_TEXT, reply_markup=menu_keyboard())
-
-    @dp.message(Command("stats"))
-    async def stats_cmd(message: Message) -> None:
-        await message.answer(stats_text(message.from_user.id), reply_markup=menu_keyboard())
-
-    @dp.message(Command("top"))
-    async def top_cmd(message: Message) -> None:
-        await message.answer(top_text(), reply_markup=menu_keyboard())
-
-    @dp.message(Command("history"))
-    async def history_cmd(message: Message) -> None:
-        await message.answer(history_text(message.from_user.id), reply_markup=menu_keyboard())
-
-    @dp.message(Command("nick"))
-    async def nick_cmd(message: Message) -> None:
-        store.save_chat_id(message.from_user.id, message.chat.id)
-        raw = (message.text or "").split(maxsplit=1)
-        if len(raw) < 2 or not raw[1].strip():
-            current = store.player_profile(message.from_user.id, message.from_user.full_name)["nick"]
-            await message.answer(
-                f"Ваш ник: <b>{current or 'не задан'}</b>\n"
-                "Сменить: <code>/nick Новое имя</code> (до 24 знаков).",
-                reply_markup=menu_keyboard(),
-            )
-            return
-        store.set_nick(message.from_user.id, raw[1])
-        profile = store.player_profile(message.from_user.id, message.from_user.full_name)
-        await message.answer(f"Готово. В партиях вы теперь <b>{profile['nick']}</b>.",
-                             reply_markup=menu_keyboard())
-
-    @dp.message(Command("profile"))
-    async def profile_cmd(message: Message) -> None:
-        store.save_chat_id(message.from_user.id, message.chat.id)
-        user_id = message.from_user.id
-        profile = store.player_profile(user_id, message.from_user.full_name)
+    @dp.callback_query(F.data == "me:profile")
+    async def profile_cb(call: CallbackQuery) -> None:
+        await call.answer()
+        user_id = call.from_user.id
+        profile = store.player_profile(user_id, call.from_user.full_name)
         stats = profile["stats"]
         lines = [
             f"👤 <b>{profile['name'] or 'Игрок'}</b>",
@@ -268,17 +243,68 @@ def make_dispatcher() -> Dispatcher:
             f"Рейтинг PvP: <b>{profile['rating']}</b>",
             f"Партий: {stats.get('total_games', 0)} · побед {stats.get('total_wins', 0)} "
             f"· ничьих {stats.get('total_draws', 0)}",
-            "",
-            "Сменить ник: <code>/nick Новое имя</code>",
         ]
-        await message.answer("\n".join(lines), reply_markup=menu_keyboard())
+        rows = [[InlineKeyboardButton(text="✏️ Сменить ник", callback_data="me:nick")]]
+        if is_admin(user_id):
+            rows.append([InlineKeyboardButton(text="🧹 Очистить базу", callback_data="admin:wipe")])
+        rows.append([InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:root")])
+        await edit_menu(call, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows))
 
-    @dp.message(Command("wipe_db"))
-    async def wipe_cmd(message: Message) -> None:
-        admin = int(os.environ.get("ADMIN_ID", "0") or 0)
-        if not admin or message.from_user.id != admin:
-            await message.answer("Очистка базы доступна только администратору.")
+    @dp.callback_query(F.data == "me:nick")
+    async def nick_prompt(call: CallbackQuery) -> None:
+        await call.answer()
+        PENDING_NICK.add(call.from_user.id)
+        current = store.player_profile(call.from_user.id)["nick"]
+        await edit_menu(
+            call,
+            f"Текущий ник: <b>{current or 'как в Telegram'}</b>\n\n"
+            "Пришлите новое имя сообщением — до 24 знаков.",
+            back_markup("me:profile"),
+        )
+
+    @dp.message(F.text & ~F.text.startswith("/"))
+    async def nick_input(message: Message) -> None:
+        user = message.from_user
+        if user.id not in PENDING_NICK:
+            await message.answer("Выберите действие кнопками в меню.", reply_markup=menu_keyboard())
             return
+        PENDING_NICK.discard(user.id)
+        store.save_chat_id(user.id, message.chat.id)
+        value = (message.text or "").strip()
+        if not value:
+            await message.answer("Ник пустой — попробуйте ещё раз.", reply_markup=menu_keyboard())
+            return
+        store.set_nick(user.id, value)
+        profile = store.player_profile(user.id, user.full_name)
+        await message.answer(f"Готово. В партиях вы теперь <b>{profile['nick']}</b>.",
+                             reply_markup=menu_keyboard())
+
+    @dp.callback_query(F.data == "history:show")
+    async def history_cb(call: CallbackQuery) -> None:
+        await call.answer()
+        await edit_menu(call, history_text(call.from_user.id), back_markup())
+
+    @dp.callback_query(F.data == "admin:wipe")
+    async def wipe_ask(call: CallbackQuery) -> None:
+        await call.answer()
+        if not is_admin(call.from_user.id):
+            return
+        await edit_menu(
+            call,
+            "🧹 <b>Очистить базу?</b>\n\n"
+            "Партии, игроки и приглашения удалятся. Перед очисткой сохраню JSON-копию.",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Да, очистить", callback_data="admin:wipe:yes")],
+                [InlineKeyboardButton(text="⬅️ Назад", callback_data="me:profile")],
+            ]),
+        )
+
+    @dp.callback_query(F.data == "admin:wipe:yes")
+    async def wipe_do(call: CallbackQuery) -> None:
+        if not is_admin(call.from_user.id):
+            await call.answer("Только администратор", show_alert=True)
+            return
+        await call.answer()
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         backup_path = os.path.abspath(f"wipe-{stamp}.json")
         payload = store.export_tables()
@@ -288,10 +314,12 @@ def make_dispatcher() -> Dispatcher:
         log.warning("База очищена, копия в %s", backup_path)
         games = len(payload.get("games") or [])
         players = len(payload.get("players") or [])
-        await message.answer(
+        await edit_menu(
+            call,
             "🧹 <b>База очищена</b>\n"
-            f"Копия перед очисткой: <code>{backup_path}</code>\n"
-            f"Было партий: {games}, игроков: {players}."
+            f"Копия: <code>{backup_path}</code>\n"
+            f"Было партий: {games}, игроков: {players}.",
+            back_markup(),
         )
 
     @dp.callback_query(F.data == "stats:me")
@@ -489,6 +517,8 @@ async def main() -> None:
             await bot.delete_webhook()
         me = await bot.get_me()
         log.info("Telegram: @%s", me.username)
+        # в списке команд у пользователя остаётся только /start
+        await bot.set_my_commands([BotCommand(command="start", description="Меню")])
         if runner is not None:
             runner.app["bot_healthy"] = True
     except Exception as error:  # noqa: BLE001 — сеть может моргнуть, поллинг попробуем всё равно
