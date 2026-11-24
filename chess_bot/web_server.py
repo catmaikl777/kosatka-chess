@@ -460,6 +460,10 @@ async def _telegram_state(token: str) -> dict[str, Any]:
         return {"at": time.time(), "last_error": f"нет связи: {error}"[:120]}
 
 
+# Счётчики бота: health показывает, доходят ли обновления до обработчиков.
+RUNTIME: dict[str, Any] = {"last_update": 0.0, "handled": 0, "handler_error": ""}
+
+
 async def health(request: web.Request) -> web.Response:
     bot_ok = bool(request.app.get("bot_healthy", False))
     info = request.app.get("tg_info")
@@ -475,6 +479,9 @@ async def health(request: web.Request) -> web.Response:
         "pending": info.get("pending", 0),
         "lastError": info.get("last_error", ""),
         "startupError": request.app.get("startup_error", ""),
+        "lastUpdateAgo": int(time.time() - RUNTIME["last_update"]) if RUNTIME["last_update"] else None,
+        "handled": RUNTIME["handled"],
+        "handlerError": RUNTIME["handler_error"],
     })
 
 

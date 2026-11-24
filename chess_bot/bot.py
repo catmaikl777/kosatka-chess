@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from urllib.parse import quote
 
@@ -465,6 +466,19 @@ async def main() -> None:
         log.info("Web App доступен по %s", webapp_url)
     else:
         log.warning("WEBAPP_URL не задан — играть негде: бот только создаёт партии")
+
+    from .web_server import RUNTIME
+
+    @dp.update.outer_middleware()
+    async def track_updates(handler, event, data):
+        RUNTIME["last_update"] = time.time()
+        try:
+            return await handler(event, data)
+        except Exception as error:  # noqa: BLE001 — видно в /api/health
+            RUNTIME["handler_error"] = f"{type(error).__name__}: {error}"[:200]
+            raise
+        finally:
+            RUNTIME["handled"] += 1
 
     try:
         hook = await bot.get_webhook_info()
