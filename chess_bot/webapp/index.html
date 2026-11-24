@@ -122,6 +122,35 @@ fieldset{border:0;padding:0;margin:0}
   animation:pulse 1.6s infinite}
 @keyframes pulse{70%{box-shadow:0 0 0 8px rgba(126,214,176,0)}100%{box-shadow:0 0 0 0 rgba(126,214,176,0)}}
 
+/* ---------- деревянный уют и профили ---------- */
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background-image:url("assets/board/board-01.png");background-size:300px;
+  opacity:.16;filter:saturate(1.15)}
+.players{display:flex;gap:8px;margin-bottom:10px}
+.pcard{flex:1;min-width:0;display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:16px;
+  background:linear-gradient(150deg,rgba(122,79,45,.94),rgba(66,41,21,.94));
+  box-shadow:inset 0 0 0 1px rgba(255,214,160,.14),0 8px 20px rgba(20,10,4,.32)}
+.pcard.me{box-shadow:inset 0 0 0 1px rgba(227,169,90,.5),0 8px 20px rgba(20,10,4,.32)}
+.avatar{width:32px;height:32px;flex:none;border-radius:50%;display:grid;place-items:center;
+  font-weight:800;font-size:14px;background:radial-gradient(circle at 32% 26%,#f3d39c,#a3702f);color:#2a1a0d}
+.pcard .who{min-width:0;flex:1}
+.pname{font-size:13.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pmeta{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.clock{font-variant-numeric:tabular-nums;font-weight:800;font-size:13.5px;padding:3px 8px;border-radius:10px;
+  background:rgba(24,14,6,.5);color:var(--text);flex:none}
+.clock.low{color:#ffb3a1}
+.clock.off{display:none}
+.analysis{margin-top:12px;padding:12px 14px;border-radius:16px;background:var(--panel);
+  font-size:13.5px;color:var(--dim);display:none}
+.analysis.show{display:block}
+.analysis b{color:var(--text)}
+.analysis .row{display:flex;gap:8px;align-items:baseline;padding:5px 0;border-bottom:1px dashed rgba(255,214,160,.12)}
+.analysis .row:last-of-type{border-bottom:0}
+.analysis .tag{font-size:11px;padding:1px 7px;border-radius:8px;white-space:nowrap;
+  background:rgba(255,157,132,.18);color:#ffb3a1}
+.analysis .tag.i{background:rgba(227,169,90,.18);color:var(--accent)}
+.analysis .go{margin-top:10px}
+#trainBoard{width:100%;height:auto;border-radius:12px;display:block;margin:10px 0}
 .toast *,button{user-select:none}
 .app.hidden{display:none}
 </style>
@@ -152,6 +181,8 @@ fieldset{border:0;padding:0;margin:0}
     <div class="moods" id="mood"></div>
   </header>
 
+  <div class="players" id="players"></div>
+
   <div class="boardWrap" id="boardWrap">
     <svg class="board" id="board" viewBox="0 0 440 440" role="grid" aria-label="Шахматная доска"></svg>
     <div class="overlay" id="overlay">
@@ -159,7 +190,9 @@ fieldset{border:0;padding:0;margin:0}
         <h2 id="overlayTitle"></h2>
         <p id="overlayText"></p>
         <div class="bar" style="justify-content:center">
-          <button class="primary" id="overlayAgain">Ещё партия</button>
+          <button class="primary" id="overlayRematch">Реванш</button>
+          <button class="ghost" id="overlayAnalysis">Разбор</button>
+          <button class="ghost" id="overlayAgain">В бота</button>
         </div>
       </div>
     </div>
@@ -174,6 +207,8 @@ fieldset{border:0;padding:0;margin:0}
   </div>
   <div class="counter" id="counter"></div>
 
+  <div class="analysis" id="analysis"></div>
+
   <div class="history" id="history">Косатка уже точит когти.</div>
 </div>
 
@@ -182,6 +217,19 @@ fieldset{border:0;padding:0;margin:0}
     <h3>Превращение пешки</h3>
     <p>Косатка спрашивает: в кого превращать?</p>
     <div class="levels" id="promoPick"></div>
+  </div>
+</dialog>
+
+<dialog id="dlgTrainer">
+  <div class="sheet">
+    <h3>Тренажёр</h3>
+    <p id="trainerText">Найдите лучший ход в этой позиции.</p>
+    <svg id="trainBoard" viewBox="0 0 320 320"></svg>
+    <div class="msg" id="trainerMsg"></div>
+    <div class="bar">
+      <button class="ghost" id="trainerNext">Другая позиция</button>
+      <button id="trainerClose">Закрыть</button>
+    </div>
   </div>
 </dialog>
 
@@ -664,6 +712,8 @@ function renderStatus() {
   $('btnResign').disabled = !canAct;
   $('btnDraw').disabled = !canAct || g.mode === 'pve';
   $('btnFlip').disabled = false;
+  renderPlayers(g);
+  updateClocks();
 }
 
 function renderHistory() {
@@ -688,6 +738,8 @@ function renderOverlay() {
   if (g.status === 'finished') {
     $('overlayTitle').textContent = g.resultKind === 'draw' ? 'Ничья' : 'Партия окончена';
     $('overlayText').textContent = g.result || '';
+    $('overlayRematch').style.display = g.canRematch ? '' : 'none';
+    $('overlayAnalysis').style.display = g.you ? '' : 'none';
     ov.classList.add('show');
     if (TG && TG.HapticFeedback) TG.HapticFeedback.notificationOccurred('success');
   } else if (g.status === 'waiting') {
@@ -705,6 +757,8 @@ function enterGame(g) {
   state.perspective = g.you || 'w';
   state.selected = null;
   $('overlay').classList.remove('show');
+  $('analysis').classList.remove('show');
+  state.trainer = null;
   applyGame(g);
   if (g.joinUrl) showJoinLink(g.joinUrl);
 }
@@ -717,6 +771,198 @@ function showJoinLink(url) {
   }
   const box = $('history');
   box.innerHTML = `Ссылка для друга: <b>${url}</b><br><span style="font-size:12px">Отправьте её тому, с кем хотите играть.</span>`;
+}
+
+/* ---------- профили, часы, разбор, тренажёр ---------- */
+
+function escapeHTML(text) {
+  return String(text == null ? '' : text).replace(/[&<>"']/g, (ch) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+  ));
+}
+
+function displayName(p) {
+  if (!p) return 'Соперник';
+  return p.nick || p.name || 'Игрок';
+}
+
+function sideProfile(g, side) {
+  if (!g || !g.profiles) return null;
+  return side === 'w' ? g.profiles.white : g.profiles.black;
+}
+
+function clockLeft(g, side) {
+  if (!g || !g.clocks) return null;
+  let value = side === 'w' ? g.clocks.white : g.clocks.black;
+  if (typeof value !== 'number') return null;
+  if (g.status === 'active' && g.turn === side && g.clocks.turnStarted) {
+    value -= Date.now() / 1000 - g.clocks.turnStarted;
+  }
+  return Math.max(0, value);
+}
+
+function clockText(seconds) {
+  const total = Math.max(0, Math.ceil(seconds));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m + ':' + String(s).padStart(2, '0');
+}
+
+function cardHTML(profile, side, g, isMe) {
+  const name = displayName(profile);
+  const initial = (name.trim().charAt(0) || '?').toUpperCase();
+  const meta = profile && profile.bot
+    ? (profile.levelName || 'бот')
+    : 'рейтинг ' + ((profile && profile.rating) || 1200);
+  const left = clockLeft(g, side);
+  const hasClock = left !== null;
+  const clockCls = 'clock' + (hasClock ? '' : ' off') + (hasClock && left < 20 ? ' low' : '');
+  return '<div class="pcard' + (isMe ? ' me' : '') + '">'
+    + '<div class="avatar">' + escapeHTML(initial) + '</div>'
+    + '<div class="who"><div class="pname">' + escapeHTML(name) + '</div>'
+    + '<div class="pmeta">' + escapeHTML(meta) + '</div></div>'
+    + '<div class="' + clockCls + '" data-side="' + side + '">'
+    + (hasClock ? clockText(left) : '') + '</div></div>';
+}
+
+function renderPlayers(g) {
+  const box = $('players');
+  if (!g || !g.profiles || !g.you) { box.innerHTML = ''; return; }
+  const mySide = g.you;
+  const oppSide = mySide === 'w' ? 'b' : 'w';
+  box.innerHTML = cardHTML(sideProfile(g, oppSide), oppSide, g, false)
+    + cardHTML(sideProfile(g, mySide), mySide, g, true);
+}
+
+function updateClocks() {
+  const g = state.game;
+  if (!g || !g.clocks) return;
+  document.querySelectorAll('#players .clock').forEach((el) => {
+    const left = clockLeft(g, el.dataset.side);
+    if (left === null) { el.classList.add('off'); return; }
+    el.classList.remove('off');
+    el.textContent = clockText(left);
+    el.classList.toggle('low', left < 20);
+  });
+}
+
+async function rematch() {
+  if (!state.gameId) return;
+  try {
+    const g = await api('/api/game/' + state.gameId + '/rematch', { method: 'POST', body: '{}' });
+    if (g.id) history.replaceState(null, '', '?game=' + g.id);
+    enterGame(g);
+    toast(g.notice || 'Новая партия');
+  } catch (err) { toast(err.message); }
+}
+
+async function showAnalysis() {
+  if (!state.gameId) return;
+  const box = $('analysis');
+  box.classList.add('show');
+  box.textContent = 'Разбираю партию…';
+  try {
+    const rep = await api('/api/game/' + state.gameId + '/analysis');
+    const items = rep.items || [];
+    if (!items.length) {
+      box.innerHTML = '<b>Разбор:</b> грубых ошибок нет — Косатка довольна.';
+      return;
+    }
+    const mine = (rep.counts && rep.counts[state.game.you]) || { blunder: 0, inaccuracy: 0 };
+    const rows = items.map((it) => {
+      const tag = it.kind === 'blunder'
+        ? '<span class="tag">ошибка</span>'
+        : '<span class="tag i">неточность</span>';
+      const num = Math.ceil(it.ply / 2) + (it.side === 'b' ? '…' : '.');
+      return '<div class="row">' + tag + ' <b>' + num + ' ' + escapeHTML(it.san) + '</b> −'
+        + it.loss + ' <span>лучше ' + escapeHTML(it.best) + '</span></div>';
+    }).join('');
+    box.innerHTML = '<b>Разбор:</b> ошибок ' + mine.blunder + ', неточностей ' + mine.inaccuracy
+      + rows + '<button class="primary go" id="btnTrainer">Потренировать ошибки</button>';
+    $('btnTrainer').addEventListener('click', openTrainer);
+  } catch (err) {
+    box.innerHTML = 'Разбор не получился: ' + escapeHTML(err.message);
+  }
+}
+
+const TFILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+const TCELL = 40;
+
+function trainXY(square) {
+  const file = square.charCodeAt(0) - 97;
+  const rank = Number(square[1]) - 1;
+  return [file * TCELL, (7 - rank) * TCELL];
+}
+
+function renderTrainBoard() {
+  const task = state.trainer;
+  const svg = $('trainBoard');
+  if (!task) { svg.innerHTML = ''; return; }
+  const parts = [];
+  for (let file = 0; file < 8; file++) {
+    for (let rank = 7; rank >= 0; rank--) {
+      const square = TFILES[file] + (rank + 1);
+      const light = (file + rank) % 2 === 1;
+      const cls = 'tsq' + (task.selected === square ? ' sel' : '');
+      parts.push('<rect class="' + cls + '" data-tsq="' + square + '" x="' + file * TCELL
+        + '" y="' + (7 - rank) * TCELL + '" width="' + TCELL + '" height="' + TCELL
+        + '" fill="' + (light ? '#edd3ad' : '#a9713f') + '"/>');
+    }
+  }
+  Object.entries(task.board || {}).forEach(([square, piece]) => {
+    const [x, y] = trainXY(square);
+    parts.push(pieceMarkup(piece, x + TCELL / 2, y + TCELL / 2, TCELL * 0.9, false));
+  });
+  svg.innerHTML = parts.join('');
+  svg.querySelectorAll('[data-tsq]').forEach((el) => {
+    el.addEventListener('click', () => onTrainSquare(el.dataset.tsq));
+  });
+}
+
+async function openTrainer() {
+  try {
+    const task = await api('/api/trainer/next');
+    state.trainer = Object.assign({}, task, { selected: null, done: false });
+    $('trainerMsg').textContent = '';
+    $('trainerText').textContent = task.san
+      ? 'В партии был ' + task.san + ' (−' + task.loss + '). Найдите лучший ход.'
+      : 'Найдите лучший ход.';
+    renderTrainBoard();
+    const dlg = $('dlgTrainer');
+    if (!dlg.open) dlg.showModal();
+  } catch (err) { toast(err.message); }
+}
+
+async function onTrainSquare(square) {
+  const task = state.trainer;
+  if (!task || task.done) return;
+  if (!task.selected) {
+    if (!task.board[square]) return;
+    task.selected = square;
+    renderTrainBoard();
+    return;
+  }
+  if (task.selected === square) { task.selected = null; renderTrainBoard(); return; }
+  const options = (task.legal || []).filter((m) => m.slice(0, 2) === task.selected && m.slice(2, 4) === square);
+  if (!options.length) {
+    task.selected = task.board[square] ? square : null;
+    renderTrainBoard();
+    return;
+  }
+  const move = options.length === 1 ? options[0] : (options.find((m) => m[4] === 'q') || options[0]);
+  task.selected = null;
+  task.done = true;
+  try {
+    const res = await api('/api/trainer/check', {
+      method: 'POST',
+      body: JSON.stringify({ fen: task.fen, uci: move, best: task.best }),
+    });
+    task.board = res.board;
+    renderTrainBoard();
+    $('trainerMsg').textContent = res.ok ? 'Верно! Так и надо было.' : 'Лучше было ' + res.bestSan + '.';
+    $('trainerMsg').style.color = res.ok ? 'var(--ok)' : 'var(--bad)';
+    if (res.ok && Sound.enabled) Sound.check();
+  } catch (err) { toast(err.message); }
 }
 
 /* ---------- кнопки ---------- */
@@ -757,6 +1003,10 @@ function bindActions() {
   });
 
   $('overlayAgain').addEventListener('click', () => toast('Новую партию заведите в Telegram — через бота Косатки'));
+  $('overlayRematch').addEventListener('click', rematch);
+  $('overlayAnalysis').addEventListener('click', showAnalysis);
+  $('trainerNext').addEventListener('click', openTrainer);
+  $('trainerClose').addEventListener('click', () => $('dlgTrainer').close());
 
   $('btnResign').addEventListener('click', async () => {
     if (!state.gameId) return;
@@ -794,6 +1044,7 @@ function toast(text) {
 
 async function boot() {
   bindActions();
+  setInterval(updateClocks, 200);
   renderBoard();
 
   if (!state.isTelegram) {

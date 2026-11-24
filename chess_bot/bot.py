@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime
@@ -19,7 +20,7 @@ from urllib.parse import quote
 import chess
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramConflictError
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     CallbackQuery,
@@ -30,7 +31,7 @@ from aiogram.types import (
 )
 
 from .app.engine import LEVEL_NAMES
-from .app.store import GameStore
+from .app.store import TIME_CONTROL_NAMES, GameStore
 
 log = logging.getLogger("chess_bot")
 
@@ -53,8 +54,32 @@ HELP_TEXT = (
     "3. Ход: нажмите фигуру, затем клетку.\n"
     "4. Превращение пешки: выберите фигуру из подсказки.\n\n"
     "«Сдаться» и «Ничья» — кнопками под доской в вебе.\n"
-    "Партии хранятся в базе, поэтому перезапуск Косатки не теряет позицию."
+    "Партии хранятся в базе, поэтому перезапуск Косатки не теряет позицию.\n\n"
+    "Имя в партиях меняется командой <code>/nick Имя</code>, "
+    "профиль и рейтинг — <code>/profile</code>."
 )
+
+
+def player_name(user_id: int, fallback: str) -> str:
+    profile = store.player_profile(user_id, fallback)
+    return profile.get("nick") or profile.get("name") or fallback
+
+
+def card_text(game, user_id: int) -> str:
+    """Короткая карточка партии для чата."""
+    color = game.user_color(user_id)
+    side = "белые" if color else "чёрные"
+    if game.mode == "pve":
+        head = f"♟ <b>Партия #{game.id}</b> · с Косаткой ({LEVEL_NAMES.get(game.level or 2, 'Любитель')})"
+    else:
+        head = f"♟ <b>Партия #{game.id}</b> · с другом"
+    lines = [head, f"Вы: {side}"]
+    opponent = game.black_name if color else game.white_name
+    if opponent:
+        lines.append(f"Соперник: {opponent}")
+    speed = TIME_CONTROL_NAMES.get(game.time_control or "", "без таймера")
+    lines.append(f"Время: {speed} · рейтинг: {store.player_rating(user_id)}")
+    return "\n".join(lines)
 
 
 def _pct(part: int, total: int) -> str:
@@ -171,8 +196,10 @@ def make_dispatcher() -> Dispatcher:
         if game is None:
             await message.answer("Приглашение не найдено или устарело.")
             return
-        store.touch_player(user.id, user.full_name)
-        ok, text, game = store.join(game.id, user.id, user.full_name)
+        store.save_chat_id(user.id, message.chat.id)
+        name = player_name(user.id, user.full_name)
+        store.touch_player(user.id, name)
+        ok, text, game = store.join(game.id, user.id, name)
         await message.answer(text)
         if game is None or (not ok and game.user_color(user.id) is None):
             return
@@ -182,6 +209,7 @@ def make_dispatcher() -> Dispatcher:
 
     @dp.message(CommandStart())
     async def start(message: Message) -> None:
+        store.save_chat_id(message.from_user.id, message.chat.id)
         await message.answer(MENU_TEXT, reply_markup=menu_keyboard())
         active = store.user_games(message.from_user.id)
         if active:
@@ -209,6 +237,61 @@ def make_dispatcher() -> Dispatcher:
     @dp.message(Command("history"))
     async def history_cmd(message: Message) -> None:
         await message.answer(history_text(message.from_user.id), reply_markup=menu_keyboard())
+
+    @dp.message(Command("nick"))
+    async def nick_cmd(message: Message) -> None:
+        store.save_chat_id(message.from_user.id, message.chat.id)
+        raw = (message.text or "").split(maxsplit=1)
+        if len(raw) < 2 or not raw[1].strip():
+            current = store.player_profile(message.from_user.id, message.from_user.full_name)["nick"]
+            await message.answer(
+                f"Ваш ник: <b>{current or 'не задан'}</b>\n"
+                "Сменить: <code>/nick Новое имя</code> (до 24 знаков).",
+                reply_markup=menu_keyboard(),
+            )
+            return
+        store.set_nick(message.from_user.id, raw[1])
+        profile = store.player_profile(message.from_user.id, message.from_user.full_name)
+        await message.answer(f"Готово. В партиях вы теперь <b>{profile['nick']}</b>.",
+                             reply_markup=menu_keyboard())
+
+    @dp.message(Command("profile"))
+    async def profile_cmd(message: Message) -> None:
+        store.save_chat_id(message.from_user.id, message.chat.id)
+        user_id = message.from_user.id
+        profile = store.player_profile(user_id, message.from_user.full_name)
+        stats = profile["stats"]
+        lines = [
+            f"👤 <b>{profile['name'] or 'Игрок'}</b>",
+            f"Ник в партиях: <b>{profile['nick'] or 'как в Telegram'}</b>",
+            f"Рейтинг PvP: <b>{profile['rating']}</b>",
+            f"Партий: {stats.get('total_games', 0)} · побед {stats.get('total_wins', 0)} "
+            f"· ничьих {stats.get('total_draws', 0)}",
+            "",
+            "Сменить ник: <code>/nick Новое имя</code>",
+        ]
+        await message.answer("\n".join(lines), reply_markup=menu_keyboard())
+
+    @dp.message(Command("wipe_db"))
+    async def wipe_cmd(message: Message) -> None:
+        admin = int(os.environ.get("ADMIN_ID", "0") or 0)
+        if not admin or message.from_user.id != admin:
+            await message.answer("Очистка базы доступна только администратору.")
+            return
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup_path = os.path.abspath(f"wipe-{stamp}.json")
+        payload = store.export_tables()
+        with open(backup_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        store.import_tables({}, replace=True)
+        log.warning("База очищена, копия в %s", backup_path)
+        games = len(payload.get("games") or [])
+        players = len(payload.get("players") or [])
+        await message.answer(
+            "🧹 <b>База очищена</b>\n"
+            f"Копия перед очисткой: <code>{backup_path}</code>\n"
+            f"Было партий: {games}, игроков: {players}."
+        )
 
     @dp.callback_query(F.data == "stats:me")
     async def stats_cb(call: CallbackQuery) -> None:
@@ -274,10 +357,12 @@ def make_dispatcher() -> Dispatcher:
             await call.message.edit_reply_markup(reply_markup=None)
         except TelegramBadRequest:
             pass
-        store.touch_player(call.from_user.id, call.from_user.full_name)
-        game = store.create_pve(call.from_user.id, call.from_user.full_name, color, level)
+        store.save_chat_id(call.from_user.id, call.message.chat.id)
+        name = player_name(call.from_user.id, call.from_user.full_name)
+        store.touch_player(call.from_user.id, name)
+        game = store.create_pve(call.from_user.id, name, color, level)
         markup = play_markup(game.id, [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:root")])
-        text = f"Партия #{game.id} с Косаткой ({LEVEL_NAMES[level]}) создана."
+        text = card_text(game, call.from_user.id) + "\n\nСоздана. Доска откроется по кнопке ниже."
         if markup:
             await call.message.answer(text, reply_markup=markup)
         else:
@@ -299,13 +384,15 @@ def make_dispatcher() -> Dispatcher:
     async def create_pvp(call: CallbackQuery, bot: Bot) -> None:
         color = call.data.split(":")[1] == "w"
         await call.answer()
-        store.touch_player(call.from_user.id, call.from_user.full_name)
-        game, token = store.create_pvp(call.from_user.id, call.from_user.full_name, color)
+        store.save_chat_id(call.from_user.id, call.message.chat.id)
+        name = player_name(call.from_user.id, call.from_user.full_name)
+        store.touch_player(call.from_user.id, name)
+        game, token = store.create_pvp(call.from_user.id, name, color)
         username = (await bot.get_me()).username
         link = f"https://t.me/{username}?start={token}"
         markup = play_markup(game.id, [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:root")])
         text = (
-            f"Партия #{game.id} с другом создана.\n\n"
+            card_text(game, call.from_user.id) + "\n\n"
             "Отправьте другу ссылку — он войдёт в партию и получит кнопку с доской:\n"
             f"<code>{link}</code>"
         )
@@ -337,6 +424,23 @@ def read_token() -> str:
         "2. Задайте переменную TELEGRAM_BOT_TOKEN или создайте .env в папке проекта:\n"
         "   TELEGRAM_BOT_TOKEN=123456789:ABCdef..."
     )
+
+
+async def notify_loop(bot: Bot) -> None:
+    """Раз в 5 секунд рассылает уведомления, поставленные веб-сервером."""
+    while True:
+        try:
+            for user_id, notice_id, text in store.take_notices():
+                chat = store.player_chat(user_id)
+                if chat is None:
+                    continue
+                try:
+                    await bot.send_message(chat, text, reply_markup=menu_keyboard())
+                except TelegramBadRequest as error:
+                    log.warning("Уведомление %s не отправлено: %s", notice_id, error)
+        except Exception:  # noqa: BLE001 — рассылка не должна ронять бота
+            log.exception("Ошибка рассылки уведомлений")
+        await asyncio.sleep(5)
 
 
 async def main() -> None:
@@ -378,10 +482,20 @@ async def main() -> None:
         backup_task = start_daily(store, keep=keep)
         log.info("Ежедневный бэкап включён (хранить %s копий)", keep)
 
+    notify_task = asyncio.create_task(notify_loop(bot))
     log.info("Бот запущен")
     try:
-        await dp.start_polling(bot)
+        while True:
+            try:
+                await dp.start_polling(bot)
+                break
+            except TelegramConflictError:
+                # второй экземпляр бота: локальный запуск рядом с Render
+                log.error("Конфликт: другой экземпляр бота уже забирает обновления. "
+                          "Проверю снова через 20 с.")
+                await asyncio.sleep(20)
     finally:
+        notify_task.cancel()
         if backup_task is not None:
             backup_task.cancel()
         if runner is not None:
