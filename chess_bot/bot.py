@@ -473,7 +473,9 @@ async def main() -> None:
     async def track_updates(handler, event, data):
         RUNTIME["last_update"] = time.time()
         try:
-            return await handler(event, data)
+            result = await handler(event, data)
+            RUNTIME["handler_error"] = ""
+            return result
         except Exception as error:  # noqa: BLE001 — видно в /api/health
             RUNTIME["handler_error"] = f"{type(error).__name__}: {error}"[:200]
             raise

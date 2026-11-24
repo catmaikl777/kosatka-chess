@@ -355,6 +355,8 @@ _POSTGRES_ID_COLUMNS = (
     ("messages", "chat_id"),
     ("messages", "message_id"),
     ("players", "user_id"),
+    ("players", "chat_id"),
+    ("notices", "user_id"),
 )
 
 
